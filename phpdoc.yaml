@@ -1,0 +1,16 @@
+title: PhpLib - Bibliothèque de composants Php
+path: /phplib
+doc: |
+  Ce module contient différentes classes et fonctions utiles.
+phpScripts:
+  - /phplib/httptester.php
+phpIncludes:
+  - /phplib/yaml.inc.php
+  - /phplib/httpreqst.inc.php
+  - /phplib/httpcache.inc.php
+  - /phplib/httpcachsql.inc.php
+  - /phplib/dump.inc.php
+  - /phplib/openmysql.inc.php
+  - /phplib/mysql.inc.php
+  - /phplib/srvr_name.inc.php
+  - /phplib/ophir.inc.php
