@@ -7,9 +7,9 @@ Ce package comprend différentes classes et fonctions Php, notamment :
     Elle expose principalement les 2 méthodes suivantes :
     
       - `static open(string $mysqlParams): void` qui ouvre la connexion MySQL en fonction des paramètres
-        sous la forme 'mysql://{login}:{mot_de_passe}@{serveurMySql}/{base_de_données}'
+        fournis sous la forme 'mysql://{login}:{mot_de_passe}@{serveurMySql}/{base_de_données}'
         
-      - `static query(string $sql)` exécute une requête SQL et renvoie soit TRUE si la requête ne renvoie pas
+      - `static query(string $sql)` qui exécute une requête SQL et renvoie soit TRUE si la requête ne renvoie pas
         de n-uplets, soit un objet MySqlResult qui peut être itéré pour obtenir les n-uplets.
         
     En cas d'erreur une exception est lancée.
