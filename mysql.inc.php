@@ -45,7 +45,9 @@ class MySql {
     if (!self::$mysqli)
       throw new Exception("Erreur: dans MySql::query() mysqli non défini");
     if (!($result = self::$mysqli->query($sql))) {
-      echo "sql:$sql\n";
+      //echo "sql:$sql\n";
+      if (strlen($sql) > 1000)
+        $sql = substr($sql, 0, 800)." ...";
       throw new Exception("Req. \"$sql\" invalide: ".self::$mysqli->error);
     }
     if ($result === TRUE)
