@@ -9,18 +9,27 @@ doc: |
   sous la forme mysql://{user}:{passwd}@{host}/{database}
   Voir utilisation en fin de fichier
 journal: |
+  26/4/2019:
+    restructuration
   3/8/2018 15:00
     ajout MySql::server()
   3/8/2018
     création
 */
-class MySql {
+
+// la classe MySql implémente en statique une connexion
+// Un objet est créé par résultat d'une requête pour itérer dessus
+class MySql implements Iterator {
   static $mysqli=null; // handle MySQL
   static $server=null; // serveur MySql
-    
-  // ouvre une connexion MySQL et enregistre le handle en variable de classe
-  // Il est nécessaire de passer les paramètres MySQL en paramètre pour 
-  static function open(string $mysqlParams) {
+  private $sql = ''; // la requête SQL pour pouvoir la rejouer
+  private $result = null; // l'objet mysqli_result
+  private $ctuple = null; // le tuple courant ou null
+  private $first = true; // vrai ssi aucun rewind n'a été effectué
+  
+  // ouvre une connexion MySQL et enregistre le handle en variable statique
+  // Il est nécessaire de passer en paramètre les paramètres MySQL
+  static function open(string $mysqlParams): void {
     if (!preg_match('!^mysql://([^:]+):([^@]+)@([^/]+)/(.*)$!', $mysqlParams, $matches))
       throw new Exception("Erreur: dans MySql::open() params \"".$mysqlParams."\" incorrect");
     //print_r($matches);
@@ -41,6 +50,7 @@ class MySql {
   }
   
   // exécute une requête MySQL, soulève une exception en cas d'erreur, renvoie le résultat
+  // soit TRUE soit un itérateur
   static function query(string $sql) {
     if (!self::$mysqli)
       throw new Exception("Erreur: dans MySql::query() mysqli non défini");
@@ -53,37 +63,39 @@ class MySql {
     if ($result === TRUE)
       return TRUE;
     else
-      return new MySqlResult($result);
+      return new MySql($sql, $result);
   }
-};
-
-// la classe MySqlResult permet d'utiliser le résultat d'une requête comme un itérateur
-class MySqlResult implements Iterator {
-  private $result = null; // l'objet mysqli_result
-  private $ctuple = null; // le tuple courant ou null
-  private $firstDone = false; // vrai ssi le first rewind a été effectué
   
-  function __construct(mysqli_result $result) { $this->result = $result; }
+  function __construct(string $sql, mysqli_result $result) {
+    $this->sql = $sql;
+    $this->result = $result;
+    $this->first = true;
+  }
   
   function rewind(): void {
-    if ($this->firstDone) // nouveau rewind
-      throw new Exception("Erreur dans MySqlResult::rewind() : un seul rewind() autorisé");
-    $this->firstDone = true;
+    if ($this->first)
+      $this->first = false;
+    elseif (!($this->result = self::$mysqli->query($this->sql))) {
+      if (strlen($this->sql) > 1000)
+        $sql = substr($this->sql, 0, 800)." ...";
+      throw new Exception("Req. \"$sql\" invalide: ".self::$mysqli->error);
+    }
     $this->next();
   }
+  
   function current(): array { return $this->ctuple; }
   function key(): int { return 0; }
   function next(): void { $this->ctuple = $this->result->fetch_array(MYSQLI_ASSOC); }
   function valid(): bool { return ($this->ctuple <> null); }
 };
 
+
 if (basename(__FILE__)<>basename($_SERVER['PHP_SELF'])) return;
 
-
-MySql::open(require(__DIR__.'/mysqlparams.inc.php'));
-$sql = "select id_rte500, nom_comm, insee_comm, population, superficie, statut, id_nd_rte, ST_AsText(geom) geom "
-      ."from route500.noeud_commune where nom_comm like 'BEAUN%'";
-$sql = "describe route500.noeud_commune";
+MySql::open('mysql://root:htpqrs28@172.17.0.3/route500');
+$sql = "select *
+from INFORMATION_SCHEMA.TABLES
+where table_schema<>'information_schema' and table_schema<>'mysql'";
 if (0) {  // Test 2 rewind 
   $result = MySql::query($sql);
   foreach ($result as $tuple) {
@@ -98,4 +110,4 @@ else {
   foreach (MySql::query($sql) as $tuple) {
     print_r($tuple);
   }
-}
+} 

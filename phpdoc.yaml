@@ -11,6 +11,7 @@ phpIncludes:
   - /phplib/httpcachsql.inc.php
   - /phplib/dump.inc.php
   - /phplib/openmysql.inc.php
+  - /phplib/sql.inc.php
   - /phplib/mysql.inc.php
   - /phplib/srvr_name.inc.php
   - /phplib/ophir.inc.php
