@@ -1,11 +1,11 @@
 <?php
 /*PhpDoc:
-  name:  httpreqst.inc.php
-  title: httpreqst.inc.php - classe HttpRequest pour effectuer simplement des requêtes HTTP
-  classes:
-  doc: |
-    ATTENTION : pour un fonctionnement normal, la directive de configuration track_errors doit être activée
-    (elle est désactivée par défaut).
+name:  httpreqst.inc.php
+title: httpreqst.inc.php - classe HttpRequest pour effectuer simplement des requêtes HTTP
+classes:
+doc: |
+  ATTENTION : pour un fonctionnement normal, la directive de configuration track_errors doit être activée
+  (elle est désactivée par défaut).
 */
 
 // définition du proxy en fonction du lieu d'exécution

@@ -1,8 +1,8 @@
 <?php
 /*PhpDoc:
-  name:  dump.inc.php
-  title: dump.inc.php - function affichant la chaine en séparant chaque caractère et en affichant aussi le code hexa correspondant
-  functions:
+name:  dump.inc.php
+title: dump.inc.php - function affichant la chaine en séparant chaque caractère et en affichant aussi le code hexa correspondant
+functions:
 */
 
 /*PhpDoc: functions

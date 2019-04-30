@@ -2,7 +2,7 @@
 /*PhpDoc:
 name: sql.inc.php
 title: sql.inc.php - classes Sql et PgSql utilisées pour exécuter des requêtes Sql
-includes: [ sql.inc.php ]
+includes: [ mysql.inc.php ]
 classes:
 doc: |
   Simplification de l'utilisation de MySql et PgSql.

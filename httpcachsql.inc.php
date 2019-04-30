@@ -1,19 +1,19 @@
 <?php
 /*PhpDoc:
-  name:  httpcachsql.inc.php
-  title: httpcachsql.inc.php - lecture HTTP avec un cache stocké dans une base SQLite - 23/2/2015
-  includes: [ httpreqst.inc.php ]
-  doc: |
-    Un cache est défini dans une base SQLite par:
-    - une table (id,content) dont la clé id est le MD5 de l'URL et la valeur content est le contenu bzippé du fichier,
-    - une table (dh,message) de messages horodatés d'évènement associés:
-      - ouverture/fermeture de la session
-      - erreurs rencontrées
+name:  httpcachsql.inc.php
+title: httpcachsql.inc.php - lecture HTTP avec un cache stocké dans une base SQLite - 23/2/2015
+includes: [ httpreqst.inc.php ]
+doc: |
+  Un cache est défini dans une base SQLite par:
+  - une table (id,content) dont la clé id est le MD5 de l'URL et la valeur content est le contenu bzippé du fichier,
+  - une table (dh,message) de messages horodatés d'évènement associés:
+    - ouverture/fermeture de la session
+    - erreurs rencontrées
 
-    Un objet Cache correspond à une session d'utilisation d'un cache
+  Un objet Cache correspond à une session d'utilisation d'un cache
 
-    Gestion des exceptions:
-    Les exceptions provenant de la classe HttpRequest sont interceptées, enregistrées dans le fichier de logs et relancées.
+  Gestion des exceptions:
+  Les exceptions provenant de la classe HttpRequest sont interceptées, enregistrées dans le fichier de logs et relancées.
 */
 
 require_once dirname(__FILE__).'/httpreqst.inc.php';

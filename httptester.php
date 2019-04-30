@@ -1,12 +1,12 @@
 <?php
 /*PhpDoc:
-  name:  httptester.php
-  title: httptester.php - serveur de test
-  doc: |
-    Permet de simuler différentes situations pour tester le traitement dans httprequest:
-    1) retour HTTP OK
-    2) retour d'un code d'erreur HTTP
-    3) pas de retour, délai très long
+name:  httptester.php
+title: httptester.php - serveur de test
+doc: |
+  Permet de simuler différentes situations pour tester le traitement dans httprequest:
+  1) retour HTTP OK
+  2) retour d'un code d'erreur HTTP
+  3) pas de retour, délai très long
 */
 
 if (!isset($_GET['test'])) {
