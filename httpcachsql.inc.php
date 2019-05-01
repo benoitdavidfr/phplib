@@ -16,7 +16,7 @@ doc: |
   Les exceptions provenant de la classe HttpRequest sont interceptées, enregistrées dans le fichier de logs et relancées.
 */
 
-require_once dirname(__FILE__).'/httpreqst.inc.php';
+require_once __DIR__.'/httpreqst.inc.php';
 
 class HttpCacheSQLite {
   private $httpRequest; // objet HttpRequest utilisé pour effectuer les requêtes

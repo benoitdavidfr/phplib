@@ -5,7 +5,7 @@ title: httpcache.inc.php - lecture HTTP avec un cache - 22/2/2015
 includes: [ httpreqst.inc.php ]
 classes:
 */
-require_once dirname(__FILE__).'/httpreqst.inc.php';
+require_once __DIR__.'/httpreqst.inc.php';
 
 /*PhpDoc: classes
 name:  HttpCache

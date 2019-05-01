@@ -22,7 +22,7 @@ doc: |
   Si la fonction yaml_parse() n'est pas déjà définie alors le module Spyc est utilisé
 */
 if (!function_exists('yaml_parse')) {
-  require_once dirname(__FILE__).'/../spyc/spyc2.inc.php';
+  require_once __DIR__.'/../spyc/spyc2.inc.php';
   function yaml_parse($input, $pos=0, &$ndocs=null, $callbacks=null) {
     return spycLoad($input);
   }
@@ -35,7 +35,7 @@ doc: |
   Si la fonction yaml_emit() n'est pas déjà définie alors le module Spyc est utilisé
 */
 if (!function_exists('yaml_emit')) {
-  require_once dirname(__FILE__).'/../spyc/spyc2.inc.php';
+  require_once __DIR__.'/../spyc/spyc2.inc.php';
   function yaml_emit($data, $encoding=YAML_ANY_ENCODING, $linebreak=YAML_ANY_BREAK, $callbacks=null) {
     return Spyc::YAMLDump($data, 2, 80, true);
   }
