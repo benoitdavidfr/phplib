@@ -2,6 +2,8 @@ title: PhpLib - Bibliothèque de composants Php
 path: /phplib
 doc: |
   Ce module contient différentes classes et fonctions utiles.
+  synchro:
+    http://localhost/synchro.php?remote=http://bdavid.alwaysdata.net/&dir=phplib
 phpScripts:
   - /phplib/httptester.php
 phpIncludes:
@@ -11,6 +13,7 @@ phpIncludes:
   - /phplib/httpcachsql.inc.php
   - /phplib/dump.inc.php
   - /phplib/openmysql.inc.php
+  - /phplib/pgsql.inc.php
   - /phplib/sql.inc.php
   - /phplib/mysql.inc.php
   - /phplib/srvr_name.inc.php
