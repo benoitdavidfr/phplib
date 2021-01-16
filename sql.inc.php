@@ -1,17 +1,31 @@
 <?php
 /*PhpDoc:
 name: sql.inc.php
-title: sql.inc.php - classes Sql et PgSql utilisées pour exécuter des requêtes Sql
-includes: [ mysql.inc.php ]
+title: sql.inc.php - classes Sql utilisée pour exécuter des requêtes Sql sur MySql ou PgSql
+includes: [ mysql.inc.php, pgsql.inc.php ]
 classes:
 doc: |
   Simplification de l'utilisation de MySql et PgSql.
-  La méthode statique Sql::open() prend en paramètre les paramètres MySql ou PgSql sous la forme:
-    - "mysql://{user}:{passwd}@{host}/{database}" pour "mysql://{user}@{host}/{database}" pour MySql ou
-    - "host={host} dbname={database} user={user} password={passwd}" ou
-      "host={host} dbname={database} user={user}" pour PgSql
-  Si le mot de passe n'est pas fourni alors il doit être défini dans le fichier secret.inc.php
+
+  MySql et PgSql ont des modèles de données différents:
+    - MySql est structuré en serveur / base / table
+    - PgSql est structuré en serveur / base / schéma / table
+
+  La notion standardisée en Sql de catalogue de tables correspond en MySql à une base et en PgSql à un schéma.
+
+  Je peux créer une vision homogène entre les 2 logiciels en partant de cette notion de catalogue de tables.
+  Les URI pour un tel catalogue de tables respectent un des motifs:
+    - pour MySql "mysql://{user}(:{passwd})?@{host}/{database}"
+    - pour PgSql "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}/{schema}"
+
+  L'articulation avec les serveur auxquels sont attachés les user/passwd est différente entre les 2 logiciels.
+  
+  Sql, MySql et PgSql sont des classes statiques ce qui implique qu'un script ne peut travailler avec
+  2 bases simultanément.
 journal: |
+  1-15/1/2021:
+    - évol motif "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" de connexion
+    - création Sql::toString()
   24/5/2019:
     - correction de PgSql::query()
     - amélioration de Sql::query()
@@ -21,6 +35,7 @@ journal: |
     création
 */
 require_once __DIR__.'/mysql.inc.php';
+require_once __DIR__.'/pgsql.inc.php';
 
 /*PhpDoc: classes
 name: Sql
@@ -31,13 +46,21 @@ class Sql {
   static $software = ''; // 'MySql' ou 'PgSql'
   
   /*PhpDoc: methods
-  name: sql.inc.php
+  name: open
   title: "static function open(string $params) - ouverture d'une connexion à un serveur de BD"
   doc: |
+    La méthode statique Sql::open() prend en paramètre les paramètres MySql ou PgSql respectant les motifs:
+      - pour MySql "mysql://{user}:{passwd}@{host}/{database}" pour "mysql://{user}@{host}/{database}"
+      - pour PgSql
+        - "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" ou
+        - "host={host} dbname={database} user={user}( password={passwd})?"
+    Si le mot de passe n'est pas fourni alors il doit être défini dans le fichier secret.inc.php
   */
   static function open(string $params) {
     if (strncmp($params, 'mysql://', 8) == 0)
       self::$software = 'MySql';
+    elseif (strncmp($params, 'pgsql://', 8) == 0)
+      self::$software = 'PgSql';
     elseif (strncmp($params, 'host=', 5) == 0)
       self::$software = 'PgSql';
     else
@@ -63,8 +86,16 @@ class Sql {
     (self::$software)::close();
   }
   
+  static function toString(array $sql): string {
+    $sqlstr = '';
+    foreach($sql as $sqlelt) // je balaye chaque élt de la requete
+      // si l'élt est une chaine alors je l'utilise sinon j'en prends l'élément corr. au soft courant
+      $sqlstr .= is_string($sqlelt) ? $sqlelt : ($sqlelt[self::$software] ?? '');
+    return $sqlstr;
+  }
+    
   /*PhpDoc: methods
-  name: sql.inc.php
+  name: query
   title: "static function query($sql) - éxécution d'une requête"
   doc: |
     La requête est soit une chaine soit une liste d'éléments,
@@ -75,99 +106,36 @@ class Sql {
       pour obtenit chacun des n-uplets
     sinon renvoie TRUE
   */
-  static function query($sql) {
+  static function query(string|array $sql) {
     if (!self::$software)
-      throw new Exception('Erreur: dans Sql::query()');
+      throw new Exception('Erreur: dans Sql::query(), software non défini');
     if (is_string($sql))
       return (self::$software)::query($sql);
-    elseif (is_array($sql)) {
-      $sqlstr = '';
-      foreach($sql as $sqlelt) // je balaye chaque élt de la requete
-        // si l'élt est une chaine alors je l'utilise sinon j'en prends l'élément corr. au soft courant
-        $sqlstr .= is_string($sqlelt) ? $sqlelt : ($sqlelt[self::$software] ?? '');
-      return (self::$software)::query($sqlstr);
-    }
+    elseif (is_array($sql))
+      return (self::$software)::query(self::toString($sql));
     else
       throw new Exception('Erreur: dans Sql::query()');
+  }
+
+  static function getTuples(string|array $sql): array { // renvoie le résultat d'une requête sous la forme d'un array
+    /*PhpDoc: methods
+    name: getTuples
+    title: "static function getTuples(string $sql): array - renvoie le résultat d'une requête sous la forme d'un array"
+    doc: |
+      Plus adapté que query() quand on sait que le nombre de n-uplets retournés est faible
+    */
+    $tuples = [];
+    foreach (self::query($sql) as $tuple)
+      $tuples[] = $tuple;
+    return $tuples;
   }
 };
 
-// classe implémentant en statique les méthodes de connexion et de requete
-// et générant un objet correspondant à un itérateur permettant d'accéder au résultat
-class PgSql implements Iterator {
-  static $server; // le nom du serveur
-  private $sql = null; // la requête conservée pour pouvoir faire plusieurs rewind
-  private $result = null; // l'objet retourné par pg_query()
-  private $first; // indique s'il s'agit du premier rewind
-  private $id; // un no en séquence à partir de 1
-  private $ctuple = false; // le tuple courant ou false
-  
-  static function open(string $connection_string) {
-    if (!preg_match('!^host=([^ ]+) dbname=([^ ]+) user=([^ ]+)( password=([^ ]+))?$!', $connection_string, $matches))
-      throw new Exception("Erreur: dans PgSql::open() params \"".$connection_string."\" incorrect");
-    $server = $matches[1];
-    $database = $matches[2];
-    $user = $matches[3];
-    $passwd = $matches[4] ?? null;
-    self::$server = $server;
-    if (!$passwd) {
-      if (!is_file(__DIR__.'/secret.inc.php'))
-        throw new Exception("Erreur: dans PgSql::open($connection_string), fichier secret.inc.php absent");
-      else {
-        $secrets = require(__DIR__.'/secret.inc.php');
-        $passwd = $secrets['sql']["pgsql://$user@$server/"] ?? null;
-        if (!$passwd)
-          throw new Exception("Erreur: dans PgSql::open($connection_string), mot de passe absent de secret.inc.php");
-      }
-      $connection_string .= " password=$passwd";
-    }
-    if (!pg_connect($connection_string))
-      throw new Exception('Could not connect: '.pg_last_error());
-  }
-  
-  static function server(): string {
-    if (!self::$server)
-      throw new Exception("Erreur: dans PgSql::server() server non défini");
-    return self::$server;
-  }
-  
-  static function close(): void { pg_close(); }
-  
-  static function query(string $sql) {
-    if (!($result = @pg_query($sql)))
-      throw new Exception('Query failed: '.pg_last_error());
-    if ($result === TRUE)
-      return TRUE;
-    else
-      return new PgSql($sql, $result);
-  }
 
-  function __construct(string $sql, $result) { $this->sql = $sql; $this->result = $result; $this->first = true; }
-  
-  function rewind(): void {
-    if ($this->first) // la première fois ne pas faire de pg_query qui a déjà été fait
-      $this->first = false;
-    elseif (!($this->result = @pg_query($this->sql)))
-      throw new Exception('Query failed: '.pg_last_error());
-    $this->id = 0;
-    $this->next();
-  }
-  
-  function next(): void {
-    $this->ctuple = pg_fetch_array($this->result, null, PGSQL_ASSOC);
-    $this->id++;
-  }
-  
-  function valid(): bool { return $this->ctuple <> false; }
-  function current(): array { return $this->ctuple; }
-  function key(): int { return $this->id; }
-}
+if ((__FILE__ <> realpath($_SERVER['DOCUMENT_ROOT'].$_SERVER['SCRIPT_NAME'])) && (($argv[0] ?? '') <> basename(__FILE__))) return;
+echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>sql.inc.php</title></head><body><pre>\n";
 
 
-if (basename(__FILE__)<>basename($_SERVER['PHP_SELF'])) return;
-
-
-echo "<pre>";
 if (0) { // Test MySql
   MySql::open('mysql://root@172.17.0.3/route500');
   $sql = "select *
@@ -190,16 +158,15 @@ if (0) { // Test MySql
     }
   }
 }
-elseif (1) { // Test PgSql
-  //PgSql::open('host=172.17.0.4 dbname=postgres user=postgres password=benoit'); 
-  PgSql::open('host=172.17.0.4 dbname=postgres user=postgres'); 
+elseif (0) { // Test PgSql
+  PgSql::open('pgsql://docker@172.17.0.4/gis');
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (PgSql::query($sql) as $tuple) {
     echo "tuple="; print_r($tuple);
   }
 }
 else { // Test Sql
-  Sql::open('host=172.17.0.4 dbname=postgres user=postgres password=benoit'); 
+  Sql::open('host=172.17.0.4 dbname=gis user=docker'); 
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (Sql::query($sql) as $tuple) {
     echo "tuple="; print_r($tuple);
