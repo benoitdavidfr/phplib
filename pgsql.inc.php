@@ -4,7 +4,20 @@ name: pgsql.inc.php
 title: pgsql.inc.php - définition de la classe PgSql facilitant l'utilisation de PostgreSql
 classes:
 doc: |
-  Fork de sql.inc.php permettant d'utiliser cette classe sans Sql
+  La méthode statique PgSql::open(string $params) ouvre une connexion au serveur et à la base définis.
+  La méthode statique PgSql::query(string $sql) exécute une requête SQL.
+
+  Chaque base définit un catalogue (au sens information_schema).
+  Le schema information_schema contient notamment les tables:
+    - schemata - liste des schema du catalogue, cad de la base
+    - tables - liste des tables
+    - columns - liste des colonnes avec notamment
+      - la colonne data_type qui vaut 'USER-DEFINED' si le type est user-defined
+        et dans ce cas la colonne udt_name donne le nom du type, par ex 'geometry'
+    - key_column_usage - liste les clés primaires et index uniques avec semble t'il les colonnes qui y participent
+  Le schema pg_catalog contient la table:
+    - pg_indexes - index avec sa définition
+
 journal: |
   16/1/2021:
     - ajout de champs à PgSql
@@ -15,6 +28,8 @@ journal: |
     - ajout PgSql::$connection et PgSql::affected_rows()
   18/6/2020:
     - écriture d'une doc
+includes:
+  - secret.inc.php
 */
 
 /*PhpDoc: classes
@@ -26,7 +41,8 @@ doc: |
   et générant un objet correspondant à un itérateur permettant d'accéder au résultat
 
   La méthode statique open() ouvre une connexion PgSql à un {user}@{server}/{dbname}(/{schema})?
-  La méthode statique query() lance une requête et retourne un objet itérable
+  La méthode statique query() exécute une requête SQL et renvoie un itérateur sur les n-uplets sélectionnés
+  dans le cas d'une requête de manipulation de données et true dans le cas d'une requête de définition de données.
 */
 class PgSql implements Iterator {
   static $connection; // ressource de connexion retournée par pg_connect()
@@ -83,7 +99,8 @@ class PgSql implements Iterator {
         throw new Exception("Erreur: dans PgSql::open($conn_string), fichier secret.inc.php absent");
       else {
         $secrets = require(__DIR__.'/secret.inc.php');
-        if (!($passwd = $secrets['sql']["pgsql://$user@$server/"] ?? null))
+        
+        if (!($passwd = $secrets['sql']["pgsql://$user@$server".($port?":$port":'')] ?? null))
           throw new Exception("Erreur: dans PgSql::open($params), mot de passe absent de secret.inc.php");
       }
       $conn_string .= " password=$passwd";
@@ -209,8 +226,8 @@ if (0) {
     echo "tuple="; print_r($tuple);
   }
 }
-else { // Navigation dans serveur / schéma / base / table / description / contenu
-  if (!($server = $_GET['server'] ?? null)) { // les serveurs définis dans secret.inc.php
+else { // Navigation dans serveur / base=catalogue / schéma / table / description / contenu
+  if (!($server = $_GET['server'] ?? null)) { // choix d'un des serveurs définis dans secret.inc.php
     $secrets = require(__DIR__.'/secret.inc.php');
     //print_r($secrets['sql']);
     echo "Servers:\n";
@@ -220,8 +237,8 @@ else { // Navigation dans serveur / schéma / base / table / description / conte
     }
     die();
   }
-  elseif (!($base = $_GET['base'] ?? null)) { // les bases du serveur
-    echo "Base de pgsql://$server:\n";
+  elseif (!($base = $_GET['base'] ?? null)) { // choix d'une des bases=catalogues du serveur
+    echo "Bases de pgsql://$server:\n";
     PgSql::open("pgsql://${server}postgres");
     $sql = "select * from pg_database";
     foreach (PgSql::query($sql) as $tuple) {
@@ -230,20 +247,20 @@ else { // Navigation dans serveur / schéma / base / table / description / conte
     }
     die();
   }
-  elseif (!($schema = $_GET['schema'] ?? null)) { // les schémas de la base
+  elseif (!($schema = $_GET['schema'] ?? null)) { // choix d'un des schémas de la base
     echo "Schémas de la base pgsql://$server$base:\n";
     PgSql::open("pgsql://$server$base");
-    $sql = "select distinct table_schema from INFORMATION_SCHEMA.TABLES";
+    $sql = "select schema_name from information_schema.schemata";
     $url = "base=$base&amp;server=".urlencode($server);
     foreach (PgSql::query($sql) as $tuple) {
-      echo "  - <a href='?schema=$tuple[table_schema]&amp;$url'>$tuple[table_schema]</a>\n";
+      echo "  - <a href='?schema=$tuple[schema_name]&amp;$url'>$tuple[schema_name]</a>\n";
     }
     die();
   }
-  elseif (!($table = $_GET['table'] ?? null)) { // les tables de la base
+  elseif (!($table = $_GET['table'] ?? null)) { // choix d'une des tables du schema
     echo "Tables de pgsql:$server$base/$schema:\n";
     PgSql::open("pgsql://$server$base/$schema");
-    $sql = "select table_name from INFORMATION_SCHEMA.TABLES
+    $sql = "select table_name from information_schema.tables
         where table_catalog='$base' and table_schema='$schema'";
     //$sql = "select * from INFORMATION_SCHEMA.TABLES";
     $url = "schema=$schema&amp;base=$base&amp;server=".urlencode($server);
@@ -255,13 +272,13 @@ else { // Navigation dans serveur / schéma / base / table / description / conte
   }
   elseif (null === ($offset = $_GET['offset'] ?? null)) { // Description de la table
     echo "Table pgsql://$server$base/$schema/$table:\n";
-    echo "  - <a href='?offset=0&amp;table=$table&amp;schema=$schema&amp;base=$base",
+    echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table&amp;schema=$schema&amp;base=$base",
       "&amp;server=".urlencode($server),"'>Affichage du contenu de la table</a>.\n";
     echo "  - Description de la table:\n";
     PgSql::open("pgsql://$server$base/$schema");
     $sql = "select c.ordinal_position, c.column_name, c.data_type, c.character_maximum_length, k.constraint_name
-          from INFORMATION_SCHEMA.columns c
-          left join INFORMATION_SCHEMA.key_column_usage k
+          from information_schema.columns c
+          left join information_schema.key_column_usage k
             on k.table_catalog=c.table_catalog and k.table_schema=c.table_schema
               and k.table_name=c.table_name and k.column_name=c.column_name
           where c.table_catalog='$base' and c.table_schema='$schema' and c.table_name='$table'";
@@ -280,7 +297,7 @@ else { // Navigation dans serveur / schéma / base / table / description / conte
     die();
   }
   else { // affichage du contenu de la table à partir de offset
-    $limit = 20;
+    $limit = (int)($_GET['limit'] ?? 20);
     PgSql::open("pgsql://$server$base/$schema");
     //print_r(PgSql::tableColumns($table));
     $columns = [];
@@ -290,19 +307,33 @@ else { // Navigation dans serveur / schéma / base / table / description / conte
       else
         $columns[] = $cname;
     }
+    $sql = $_GET['sql'] ?? "select ".implode(', ', $columns)."\nfrom $table";
+    if (substr($sql, 0, 7) <> 'select ')
+      throw new Exception("Requête \"$sql\" interdite");
     $url = "table=$table&amp;schema=$schema&amp;base=$base&amp;server=".urlencode($server);
     echo "</pre>",
       "<h2>pgsql://$server$base/$schema/$table</h2>\n",
+      
+      "<form><table border=1><tr>",
+      "<input type='hidden' name='offset' value='0'>",
+      "<input type='hidden' name='limit' value='$limit'>",
+      "<td><textarea name='sql' rows='5' cols='130'>$sql</textarea></td>",
+      "<input type='hidden' name='table' value='$table'>",
+      "<input type='hidden' name='schema' value='$schema'>",
+      "<input type='hidden' name='base' value='$base'>",
+      "<input type='hidden' name='server' value='$server'>",
+      "<td><input type=submit value='go'></td>",
+      "</tr></table></form>\n",
+
       "<a href='?$url'>^</a> ",
       ((($offset-$limit) >= 0) ? "<a href='?offset=".($offset-$limit)."&amp;$url'>&lt;</a>" : ''),
       " offset=$offset ",
       "<a href='?offset=".($offset+$limit)."&amp;$url'>&gt;</a>",
       "<table border=1>\n";
     echo "</pre><table border=1>\n";
-    $sql = "select ".implode(', ', $columns)." from $table limit $limit offset $offset";
     $no = 0;
     //echo "sql=$sql\n";
-    foreach (PgSql::query($sql) as $tuple) {
+    foreach (PgSql::query("$sql\nlimit $limit offset $offset") as $tuple) {
       if (!$no++)
         echo '<th>', implode('</th><th>', array_keys($tuple)),"</th>\n";
       echo '<tr><td>', implode('</td><td>', $tuple),"</td></tr>\n";

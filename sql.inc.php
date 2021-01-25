@@ -11,18 +11,25 @@ doc: |
     - MySql est structuré en serveur / base / table
     - PgSql est structuré en serveur / base / schéma / table
 
-  La notion standardisée en Sql de catalogue de tables correspond en MySql à une base et en PgSql à un schéma.
+  Le concept standardisé en Sql de schéma, qui est un ensemble de tables, correspond en MySql à une base
+  et en PgSql à un schéma.
+  Le concept de catalogue, qui est un ensemble de schémas, correspond en MySql à un serveur et en PgSql à une base.
 
-  Je peux créer une vision homogène entre les 2 logiciels en partant de cette notion de catalogue de tables.
-  Les URI pour un tel catalogue de tables respectent un des motifs:
+  Une vision homogène entre les 2 logiciels est définie en s'appuyant sur ces notion de schéma et de catalogue.
+  Les URI pour un schéma respectent un des motifs:
     - pour MySql "mysql://{user}(:{passwd})?@{host}/{database}"
     - pour PgSql "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}/{schema}"
+  Les URI pour un catalogue respectent un des motifs:
+    - pour MySql "mysql://{user}(:{passwd})?@{host}"
+    - pour PgSql "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}"
 
-  L'articulation avec les serveur auxquels sont attachés les user/passwd est différente entre les 2 logiciels.
+  L'articulation avec les serveurs auxquels sont attachés les user/passwd est différente entre les 2 logiciels.
   
-  Sql, MySql et PgSql sont des classes statiques ce qui implique qu'un script ne peut travailler avec
-  2 bases simultanément.
+  Sql, MySql et PgSql sont des classes statiques ce qui implique qu'un script ne peut travailler simultanément
+  avec 2 catalogues différents.
 journal: |
+  25/1/2021:
+    - amélioration utilisation des URI
   1-15/1/2021:
     - évol motif "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" de connexion
     - création Sql::toString()
@@ -50,7 +57,7 @@ class Sql {
   title: "static function open(string $params) - ouverture d'une connexion à un serveur de BD"
   doc: |
     La méthode statique Sql::open() prend en paramètre les paramètres MySql ou PgSql respectant les motifs:
-      - pour MySql "mysql://{user}:{passwd}@{host}/{database}" pour "mysql://{user}@{host}/{database}"
+      - pour MySql "mysql://{user}(:{passwd})?@{host}(/{database})?"
       - pour PgSql
         - "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" ou
         - "host={host} dbname={database} user={user}( password={passwd})?"
@@ -103,7 +110,7 @@ class Sql {
     Cela permet d'écrire de manière relativement claire des requêtes dépendant du soft.
     Si la requête échoue alors renvoie une exception
     sinon si le résultat est un ensemble de n-uplets alors renvoie un objet MySql ou PgSql qui pourra être itéré
-      pour obtenit chacun des n-uplets
+    pour obtenir chacun des n-uplets
     sinon renvoie TRUE
   */
   static function query(string|array $sql) {

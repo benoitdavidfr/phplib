@@ -10,7 +10,25 @@ doc: |
     - pour les requêtes renvoyant un ensemble de n-uplets renvoie un objet MySql pouvant être itéré pour obtenir
       chacun des n-uplets
     - pour les autres requêtes renvoie TRUE
+
+  Il existe un seul catalogue (au sens information_schema) par serveur.
+  Le schema information_schema contient notamment les tables:
+    - schemata - liste des schema, cad des bases du serveur
+    - tables - liste des tables
+    - columns - liste des colonnes avec notamment
+      - la colonne COLUMN_KEY qui vaut
+        - PRI si la colonne est une clé primaire
+        - UNI si un index unique a été créé
+        - MUL si un index non unique ou spatial a été créé
+      Si un index contient plusieurs colonnes alors seule la première est indiquée.
+      Je n'ai pas trouvé de moyen d'identfier les indexs non uniques muti-colonnes
+    - key_column_usage - liste les clés primaires et index uniques avec semble t'il les colonnes qui y participent
+
+  On peut définir un usage simplifié avec uniquement des index et clés primaines mono-attributs.
+
 journal: |
+  24/1/2021:
+    - évol. navigateur avec possibilité de définir une requête sql
   16/1/2021:
     - ajout MySql::database() et MySql::tableColumns()
     - dév. navigateur serveur / base / table / description / contenu
@@ -23,6 +41,8 @@ journal: |
     ajout MySql::server()
   3/8/2018
     création
+includes:
+  - secret.inc.php
 */
 
 /*PhpDoc: classes
@@ -53,20 +73,20 @@ class MySql implements Iterator {
         'mysql://{user}(:{password})?@{server}(/{dbname})?'
       S'ils ne contiennent pas le mot de passe alors ce dernier doit être présent dans le fichier secret.inc.php
       Si le nom de la base est défini alors elle est sélectionnée.
-      Si la base est définie et n'existe pas sur localhost ou docker alors elle est créée.
+      Sur localhost ou docker, si la base est définie et n'existe pas alors elle est créée.
     */
-    if (!preg_match('!^mysql://([^@:]+)(:[^@])?@([^/]+)/(.*)$!', $params, $matches))
+    if (!preg_match('!^mysql://([^@:]+)(:[^@])?@([^/]+)(/.*)?$!', $params, $matches))
       throw new Exception("Erreur: dans MySql::open() params \"".$params."\" incorrect");
     //print_r($matches);
     $user = $matches[1];
     $passwd = $matches[2] ? substr($matches[2], 1) : null;
     $server = $matches[3];
-    $database = $matches[4] ?? null;
+    $database = isset($matches[4]) ? substr($matches[4], 1) : null;
     if ($passwd === null) {
       if (!is_file(__DIR__.'/secret.inc.php'))
         throw new Exception("Erreur: dans MySql::open($params), fichier secret.inc.php absent");
       $secrets = require(__DIR__.'/secret.inc.php');
-      $passwd = $secrets['sql']["mysql://$user@$server/"] ?? null;
+      $passwd = $secrets['sql']["mysql://$user@$server"] ?? null;
       if (!$passwd)
         throw new Exception("Erreur: dans MySql::open($params), mot de passe absent de secret.inc.php");
     }
@@ -118,18 +138,19 @@ class MySql implements Iterator {
             'character_maximum_length'=> character_maximum_length,
             'constraint_name'=> constraint_name,
         ] ]
-      Les 5 premiers champs proviennent de la table INFORMATION_SCHEMA.columns et le dernier d'une jointure gauche
-      avec INFORMATION_SCHEMA.key_column_usage
+      Les 5 premiers champs proviennent de la table information_schema.columns et le dernier d'une jointure gauche
+      avec information_schema.key_column_usage.
+      Le paramètre $base peut être omis s'il a été défini à l'ouverture.
     */
     if (!$base)
       $base = self::$database;
     if (!$base)
       return [];
     
-    $sql = "select c.ORDINAL_POSITION, c.column_name, c.COLUMN_COMMENT, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH,
+    $sql = "select c.ORDINAL_POSITION, c.column_name, c.COLUMN_COMMENT, c.data_type, c.character_maximum_length,
             k.CONSTRAINT_NAME
-          from INFORMATION_SCHEMA.columns c
-          left join INFORMATION_SCHEMA.key_column_usage k
+          from information_schema.columns c
+          left join information_schema.key_column_usage k
             on k.table_schema=c.table_schema and k.table_name=c.table_name and k.column_name=c.column_name
               and constraint_name='PRIMARY'
         where c.table_schema='$base' and c.table_name='$table'";
@@ -142,13 +163,13 @@ class MySql implements Iterator {
   }
   
   static function query(string $sql) { // exécute une requête MySQL, soulève une exception ou renvoie le résultat 
-  /*PhpDoc: methods
-  name: query
-  title: "static function query(string $sql)- exécute une requête MySQL, soulève une exception ou renvoie le résultat"
-  doc: |
-    exécute une requête MySQL, soulève une exception en cas d'erreur, sinon renvoie le résultat soit TRUE
-    soit un objet MySql qui peut être itéré pour obtenir chaque n-uplet
-  */
+    /*PhpDoc: methods
+    name: query
+    title: "static function query(string $sql)- exécute une requête MySQL"
+    doc: |
+      exécute une requête MySQL, soulève une exception en cas d'erreur, sinon renvoie le résultat soit TRUE
+      soit un objet MySql qui peut être itéré pour obtenir chaque n-uplet
+    */
     if (!self::$mysqli)
       throw new Exception("Erreur: dans MySql::query() mysqli non défini");
     if (!($result = self::$mysqli->query($sql))) {
@@ -193,7 +214,7 @@ echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>mysql.inc.php</t
 
 if (0) {  // Test 2 rewind 
   MySql::open('mysql://root@172.17.0.3/');
-  $sql = "select * from INFORMATION_SCHEMA.TABLES
+  $sql = "select * from information_schema.TABLES
   where table_schema<>'information_schema' and table_schema<>'mysql'";
   $result = MySql::query($sql);
   foreach ($result as $tuple) {
@@ -204,7 +225,7 @@ if (0) {  // Test 2 rewind
     print_r($tuple);
   }
 }
-else { // Navigation dans serveur / base / table / description / contenu
+else { // Navigation dans serveur=catalogue / schema=base / table / description / contenu
   if (!($server = $_GET['server'] ?? null)) { // les serveurs définis dans secret.inc.php
     $secrets = require(__DIR__.'/secret.inc.php');
     //print_r($secrets['sql']);
@@ -215,78 +236,93 @@ else { // Navigation dans serveur / base / table / description / contenu
     }
     die();
   }
-  elseif (!($base = $_GET['base'] ?? null)) { // les bases du serveur
-    echo "Bases de mysql://$server:\n";
+  elseif (!($schema = $_GET['schema'] ?? null)) { // les schemas (=base) du serveur
+    echo "Schemas/base de mysql://$server:\n";
     MySql::open("mysql://$server");
-    $sql = "select distinct table_schema from INFORMATION_SCHEMA.TABLES";
-    $url = "server=$server&amp;base";
+    $sql = "select schema_name from information_schema.schemata";
+    $url = "&amp;server=$server";
     foreach (MySql::query($sql) as $tuple) {
-      echo "  - <a href='?$url=$tuple[table_schema]'>$tuple[table_schema]</a>\n";
+      echo "  - <a href='?schema=$tuple[schema_name]$url'>$tuple[schema_name]</a>\n";
     }
     die();
   }
-  elseif (!($table = $_GET['table'] ?? null)) { // les tables de la base
-    echo "Tables de mysql:$server$base:\n";
-    MySql::open("mysql://$server$base");
-    $sql = "select table_name from INFORMATION_SCHEMA.TABLES where table_schema='$base'";
-    $url = "server=".urlencode($server)."&amp;base=$base&amp;table";
+  elseif (!($table = $_GET['table'] ?? null)) { // les tables du schema
+    echo "Tables de mysql:$server$schema:\n";
+    MySql::open("mysql://$server$schema");
+    $sql = "select table_name from information_schema.tables where table_schema='$schema'";
+    $url = "&amp;schema=$schema&amp;server=".urlencode($server);
     foreach (MySql::query($sql) as $tuple) {
-      echo "  - <a href='?$url=$tuple[table_name]'>$tuple[table_name]</a>\n";
+      echo "  - <a href='?table=$tuple[table_name]$url'>$tuple[table_name]</a>\n";
     }
     die();
   }
   elseif (null === ($offset = $_GET['offset'] ?? null)) { // Description de la table
-    echo "Table mysql://$server$base/$table:\n";
-    echo "  - <a href='?server=".urlencode($_GET['server'])."&amp;base=$base&amp;table=$table&amp;offset=0'>",
+    echo "Table mysql://$server$schema/$table:\n";
+    echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table",
+      "&amp;schema=$schema&amp;server=".urlencode($_GET['server'])."'>",
       "Affichage du contenu de la table</a>.\n";
     echo "  - Description de la table:\n";
-    MySql::open("mysql://$server$base");
-    $sql = "select c.ORDINAL_POSITION, c.column_name, c.COLUMN_COMMENT, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH,
-            k.CONSTRAINT_NAME
-          from INFORMATION_SCHEMA.columns c
-          left join INFORMATION_SCHEMA.key_column_usage k
+    MySql::open("mysql://$server$schema");
+    $sql = "select c.ordinal_position, c.column_name, c.column_comment, c.data_type, c.character_maximum_length,
+            k.constraint_name
+          from information_schema.columns c
+          left join information_schema.key_column_usage k
             on k.table_schema=c.table_schema and k.table_name=c.table_name and k.column_name=c.column_name
               and constraint_name='PRIMARY'
-        where c.table_schema='$base' and c.table_name='$table'";
+        where c.table_schema='$schema' and c.table_name='$table'";
     foreach (MySql::query($sql) as $tuple) {
-      $primary_key = ($tuple['CONSTRAINT_NAME'] == 'PRIMARY') ? ' (primary key)' : '';
-      echo "    $tuple[ORDINAL_POSITION]:\n";
+      $primary_key = ($tuple['constraint_name'] == 'PRIMARY') ? ' (primary key)' : '';
+      echo "    $tuple[ordinal_position]:\n";
       echo "      id: $tuple[column_name]$primary_key\n";
-      echo $tuple['COLUMN_COMMENT'] ? "      description: $tuple[COLUMN_COMMENT]\n" : '';
-      if ($tuple['DATA_TYPE']=='varchar')
-        echo "      DATA_TYPE: $tuple[DATA_TYPE]($tuple[CHARACTER_MAXIMUM_LENGTH])\n";
+      echo $tuple['column_comment'] ? "      description: $tuple[column_comment]\n" : '';
+      if ($tuple['data_type']=='varchar')
+        echo "      data_type: $tuple[data_type]($tuple[character_maximum_length])\n";
       else
-        echo "      DATA_TYPE: $tuple[DATA_TYPE]\n";
+        echo "      data_type: $tuple[data_type]\n";
       if (0)
         print_r($tuple);
     }
     die();
   }
   else { // affichage du contenu de la table à partir de offset
-    $limit = 20;
-    MySql::open("mysql://$server$base");
+    $offset = (int)$offset;
+    $limit = (int) ($_GET['limit'] ?? 20);
+    MySql::open("mysql://$server$schema");
     $columns = [];
     foreach (MySql::tableColumns($table) as $cname => $column) {
-      if ($column['DATA_TYPE']=='geometry')
+      if ($column['data_type']=='geometry')
         $columns[] = "ST_AsGeoJSON($cname) $cname";
       else
         $columns[] = $cname;
     }
-    $url = "server=".urlencode($_GET['server'])."&amp;base=$base&amp;table=$table";
+    $sql = $_GET['sql'] ?? "select ".implode(', ', $columns)."\nfrom $table";
+    if (substr($sql, 0, 7) <> 'select ')
+      throw new Exception("Requête \"$sql\" interdite");
+    $url = "table=$table&amp;schema=$schema&amp;server=".urlencode($_GET['server']);
     echo "</pre>",
-      "<h2>mysql://$server$base/$table</h2>\n",
+      "<h2>mysql://$server$schema/$table</h2>\n",
+      "<form><table border=1><tr>",
+      "<input type='hidden' name='offset' value='0'>",
+      "<input type='hidden' name='limit' value='$limit'>",
+      "<td><textarea name='sql' rows='5' cols='130'>$sql</textarea></td>",
+      "<input type='hidden' name='table' value='$table'>",
+      "<input type='hidden' name='schema' value='$schema'>",
+      "<input type='hidden' name='server' value='$server'>",
+      "<td><input type=submit value='go'></td>",
+      "</tr></table></form>\n",
       "<a href='?$url'>^</a> ",
-      ((($offset-$limit) >= 0) ? "<a href='?offset=".($offset-$limit)."&amp;$url'>&lt;</a>" : ''),
+      ((($offset-$limit) >= 0) ? "<a href='?offset=".($offset-$limit)."&amp;limit=$limit"
+        ."&amp;sql=".urlencode($sql)."&amp;$url'>&lt;</a>" : ''),
       " offset=$offset ",
-      "<a href='?offset=".($offset+$limit)."&amp;$url'>&gt;</a>",
+      "<a href='?offset=".($offset+$limit)."&amp;limit=$limit"
+        ."&amp;sql=".urlencode($sql)."&amp;$url'>&gt;</a>",
       "<table border=1>\n";
     echo "</pre><table border=1>\n";
-    $sql = "select ".implode(', ', $columns)." from $table limit $limit offset $offset";
     $no = 0;
-    foreach (MySql::query($sql) as $tuple) {
+    foreach (MySql::query("$sql\nlimit $limit offset $offset") as $tuple) {
       if (!$no++)
-        echo '<th>', implode('</th><th>', array_keys($tuple)),"</th>\n";
-      echo '<tr><td>', implode('</td><td>', $tuple),"</td></tr>\n";
+        echo '<th>no</th><th>', implode('</th><th>', array_keys($tuple)),"</th>\n";
+      echo "<tr><td>$no</td><td>", implode('</td><td>', $tuple),"</td></tr>\n";
     }
     echo "</table>\n";
     die();

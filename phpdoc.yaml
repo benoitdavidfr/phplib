@@ -12,9 +12,11 @@ phpIncludes:
   - /phplib/httpcache.inc.php
   - /phplib/httpcachsql.inc.php
   - /phplib/dump.inc.php
-  - /phplib/openmysql.inc.php
-  - /phplib/pgsql.inc.php
   - /phplib/sql.inc.php
+  - /phplib/secret.inc.php
+  - /phplib/sqlschema.inc.php
+  - /phplib/pgsql.inc.php
   - /phplib/mysql.inc.php
+  - /phplib/openmysql.inc.php
   - /phplib/srvr_name.inc.php
   - /phplib/ophir.inc.php
