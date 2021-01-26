@@ -10,8 +10,14 @@ doc: |
 
   namespace Sql
 
+  le champ Column::dataType devrait être plus standardisé, par exemple utiliser les types JSON ou SQL standards.
+
   Le script implémente comme test un navigateur dans les serveurs définis dans secret.inc.php
+  Pour des raisons de sécurité ces fonctionnalités sont limitées sur un serveur différent de localhost
+
 journal: |
+  26/1/2021:
+    - modif 2e paramètre de Schema::__construct()
   24-25/1/2021:
     - création
 includes:
@@ -94,34 +100,43 @@ class Schema {
     return $dict;
   }
   
-  function __construct(string $uri, array $table_names=[]) {
+  function __construct(string $uri, array $options=[]) {
     /*PhpDoc: methods
     name: __construct
-    title: "function __construct(string $uri, array $table_names=[]) - crée un objet Schema à partir d'un URI"
+    title: "function __construct(string $uri, array $options=[]) - crée un objet Schema à partir d'un URI"
     doc: |
-      Le schéma peut être limité à certaines tables avec le paramètre $table_names
+      Le schéma peut être limité à certaines tables avec l'option 'table_names' qui donne une liste de noms de tables
+      ou avec l'option 'table_types' qui donne une liste de types de table parmi 'BASE TABLE','SYSTEM VIEW','VIEW'
     */
     if (!preg_match('!^(mysql://[^/]+|pgsql://[^/]+/[^/]+)/([^/]+)$!', $uri, $matches))
       throw new \Exception("Erreur: $uri incorrecte");
+    foreach ($options as $key => $option) {
+      if (!is_array($option))
+        throw new \Exception("Erreur: option $key=".json_encode($option)." incorrecte");
+    }
     $this->name = $matches[2];
     $this->uri = $uri;
     $cols = []; // [table_name => [...]]
     Sql::open($uri);
     $tables = [];
-    $sql = "select table_name, table_type \nfrom information_schema.tables where table_schema='$this->name'"
-      .($table_names ? " and table_name in ('".implode("','", $table_names)."')" : '');
+    $sql = "select table_name, table_type \nfrom information_schema.tables\n"
+      ."where table_schema='$this->name'"
+      .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '')
+      .(isset($options['table_types']) ? " and table_type in ('".implode("','", $options['table_types'])."')" : '');
     foreach (Sql::query($sql) as $tuple) {
       $tables[$tuple['table_name']] = $tuple;
     }
     $cols = [];
-    $sql = "select *\nfrom information_schema.columns where table_schema='$this->name'"
-      .($table_names ? " and table_name in ('".implode("','", $table_names)."')" : '');
+    $sql = "select *\nfrom information_schema.columns\n"
+      ."where table_schema='$this->name'"
+      .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '');
     foreach (Sql::query($sql) as $tuple0) {
       $tuple = [];
       foreach ($tuple0 as $key => $val)
         $tuple[strtolower($key)] = $val;
       //print_r($tuple);
-      $cols[$tuple['table_name']][$tuple['ordinal_position']] = $tuple;
+      if (isset($tables[$tuple['table_name']]))
+        $cols[$tuple['table_name']][$tuple['ordinal_position']] = $tuple;
     }
     //print_r($cols);
     $indexes = [];
@@ -139,8 +154,8 @@ class Schema {
     }
   }
   
-  function __get(string $name) { return isset($this->$name) ? $this->$name : null; }
   function __toString(): string { return $this->uri; }
+  function __get(string $name) { return isset($this->$name) ? $this->$name : null; }
   
   function asArray(): array {
     foreach ($this->tables as $tname => $table)
@@ -149,6 +164,17 @@ class Schema {
       'name'=> $this->name,
       'tables'=> $tables,
     ];
+  }
+
+  // Cherche un couple (table,colonne géométrique) dont la concaténation des noms correspond à $table_geom_name
+  function concatTableGeomNames(string $table_geom_name, string $sep): ?Column {
+    foreach ($this->tables as $tname => $table) {
+      foreach ($table->columns as $cname => $column) {
+        if (($column->dataType == 'geometry') && ($tname.$sep.$cname == $table_geom_name))
+          return $column;
+      }
+    }
+    return null; 
   }
 };
 
@@ -161,7 +187,7 @@ doc: |
   Les champs accessibles en lecture sont:
     - Schema $schema; // schema auquel appartient la table
     - string $name;
-    - string $type; // 'BASE TABLE' | 'VIEW'
+    - string $type; // 'BASE TABLE' | 'VIEW' | 'SYSTEM VIEW'
     - array $columns; // dict. des colonnes indexé par le nom de colonne dans l'ordre de définition
 
   Un objet peut être transformé en array par la méthode asArray()
@@ -170,7 +196,7 @@ methods:
 class Table {
   protected Schema $schema; // schema auquel appartient la table
   protected string $name;
-  protected string $type; // 'BASE TABLE' | 'VIEW'
+  protected string $type; // 'BASE TABLE' | 'VIEW' | 'SYSTEM VIEW'
   protected array $columns; // dict. des colonnes indexé par le nom de colonne dans l'ordre de définition
   
   function __construct(Schema $schema, array $tableInfo, array $cols, array $indexes) {
@@ -206,6 +232,7 @@ class Table {
     }
   }
   
+  function __toString(): string { return $this->schema.'/'.$this->name; }
   function __get(string $name) { return isset($this->$name) ? $this->$name : null; }
 
   function asArray(): array {
@@ -215,6 +242,23 @@ class Table {
       'type'=> $this->type,
       'columns'=> $cols,
     ];
+  }
+  
+  function listOfColumnOfType(string $dataType): array {
+    $list = [];
+    foreach ($this->columns as $cname => $column) {
+      if ($column->dataType == $dataType)
+        $list[$cname] = $column;
+    }
+    return $list;
+  }
+  
+  function pkeyCol(): ?Column {
+    foreach ($this->columns as $cname => $column) {
+      if ($column->indexed == 'primary')
+        return $column;
+    }
+    return null;
   }
 };
 
@@ -315,7 +359,87 @@ if (0) { // Tests de base
   //echo Yaml::dump(['mySql'=> $mySqlSchema->tables['communication_restreinte']->asArray()], 10, 2);
   //echo Yaml::dump(['pgSql'=> $pgSqlSchema->tables['communication_restreinte']->asArray()], 10, 2);
 }
-else { // Navigation dans serveur / catalogue / schéma / table / description / contenu
+elseif (0) {
+  // liste les types trouvés
+  /*
+    oid: 2848
+    int2: 236
+    bool: 1279
+    float4: 92
+    int4: 1718
+    _float4: 56
+    anyarray: 64
+    name: 4888
+    char: 452
+    regproc: 408
+    pg_node_tree: 156
+    text: 1185
+    _aclitem: 168
+    _oid: 108
+    timestamptz: 448
+    abstime: 8
+    _text: 254
+    pg_lsn: 152
+    int8: 2052
+    oidvector: 60
+    _char: 32
+    xid: 132
+    _int2: 24
+    int2vector: 60
+    pg_ndistinct: 12
+    pg_dependencies: 12
+    bytea: 16
+    _name: 32
+    regtype: 12
+    _regtype: 12
+    interval: 60
+    inet: 24
+    float8: 112
+    varchar: 3981
+    _float8: 18
+    _bool: 10
+    geometry: 76
+    bpchar: 23
+    cheflieu_source: 1
+    jsonb: 8
+    statutentite: 2
+    numeric: 59
+  */
+  $dataTypes = [];
+  $secrets = require(__DIR__.'/secret.inc.php');
+  foreach (array_keys($secrets['sql']) as $server) {
+    if (in_array($server, ['pgsql://bdavid@postgresql-bdavid.alwaysdata.net'])) {
+      echo "serveur $server skipped\n";
+      continue;
+    }
+    echo "server $server\n";
+    foreach (($catalogs = Schema::listOfPgCatalogs($server) ?? [$server]) as $catalog) {
+      echo "$server\n";
+      try {
+        foreach (Schema::listOfSchemas($catalog) as $name => $schemaUri) {
+          echo "$schemaUri\n";
+          $schema = new Schema($schemaUri);
+          foreach ($schema->tables as $table_name => $table) {
+            echo "table $table\n";
+            foreach ($table->columns as $cname => $column) {
+              echo "  $cname -> $column->dataType\n";
+              if (!isset($dataTypes[$column->dataType]))
+                $dataTypes[$column->dataType] = 1;
+              else
+                $dataTypes[$column->dataType]++;
+            }
+          }
+        }
+      }
+      catch (Exception $e) {
+        echo "Erreur sur $server ",$e->getMessage(),"\n";
+      }
+    }
+  }
+  echo Yaml::dump($dataTypes);
+  die();
+}
+else { // Navigation dans serveur / catalogue / schéma / table / description / contenu 
   if (!($schema = $_GET['schema'] ?? null)) { // choix d'un schéma
     if (!($catalog = $_GET['catalog'] ?? null)) { // choix d'un catalogue 
       if (!($server = $_GET['server'] ?? null)) { // choix d'un des serveurs définis dans secret.inc.php
@@ -358,14 +482,15 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
     echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table&amp;schema=",urlencode($schema),"'>",
         "Affichage du contenu de la table</a>.\n";
     echo "  - Description de la table:\n";
-    $schema = new Schema($schema, [$table]);
+    $schema = new Schema($schema, ['table_names'=> [$table]]);
     echo Yaml::dump($schema->tables[$table]->asArray(), 10, 2);
     die();
   }
   else { // affichage du contenu de la table à partir de offset
     $limit = (int)($_GET['limit'] ?? 20);
-    if (!($sql = $_GET['sql'] ?? null)) {
-      $schema = new Schema($schema, [$table]);
+    if (!($sql = $_GET['sql'] ?? null) || ($_SERVER['HTTP_HOST'] <> 'localhost')) {
+      // uniquement sur localhost possibilité de fournir une requête Sql 
+      $schema = new Schema($schema, ['table_names'=> [$table]]);
       $columns = [];
       foreach ($schema->tables[$table]->columns as $cname => $column) {
         if ($column->dataType == 'geometry')
@@ -375,22 +500,22 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
       }
       $sql = "select ".implode(', ', $columns)."\nfrom $table";
     }
+    else {
+      Sql::open($schema);
+    }
     //echo "sql=$sql\n";
-    if (substr($sql, 0, 7) <> 'select ')
-      throw new Exception("Requête \"$sql\" interdite");
     $url = "table=$table&amp;schema=".urlencode($schema);
-    echo "</pre>",
-      "<h2>$schema/$table</h2>\n",
-    
-      "<form><table border=1><tr>",
-      "<input type='hidden' name='offset' value='0'>",
-      "<input type='hidden' name='limit' value='$limit'>",
-      "<td><textarea name='sql' rows='5' cols='130'>$sql</textarea></td>",
-      "<input type='hidden' name='table' value='$table'>",
-      "<input type='hidden' name='schema' value='$schema'>",
-      "<td><input type=submit value='go'></td>",
-      "</tr></table></form>\n",
-
+    echo "</pre><h2>$schema/$table</h2>\n";
+    if ($_SERVER['HTTP_HOST'] == 'localhost') // uniquement sur localhost possibilité de fournir une requête Sql
+      echo "<form><table border=1><tr>",
+        "<input type='hidden' name='offset' value='0'>",
+        "<input type='hidden' name='limit' value='$limit'>",
+        "<td><textarea name='sql' rows='5' cols='130'>$sql</textarea></td>",
+        "<input type='hidden' name='table' value='$table'>",
+        "<input type='hidden' name='schema' value='$schema'>",
+        "<td><input type=submit value='go'></td>",
+        "</tr></table></form>\n";
+    echo
       "<a href='?$url'>^</a> ",
       ((($offset-$limit) >= 0) ? "<a href='?offset=".($offset-$limit)."&amp;$url'>&lt;</a>" : ''),
       " offset=$offset ",

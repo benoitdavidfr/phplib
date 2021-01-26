@@ -7,6 +7,9 @@ doc: |
   La méthode statique PgSql::open(string $params) ouvre une connexion au serveur et à la base définis.
   La méthode statique PgSql::query(string $sql) exécute une requête SQL.
 
+  Le script implémente comme test un navigateur dans les serveurs définis dans secret.inc.php
+  Pour des raisons de sécurité ces fonctionnalités ne sont disponibles que sur le serveur localhost
+
   Chaque base définit un catalogue (au sens information_schema).
   Le schema information_schema contient notamment les tables:
     - schemata - liste des schema du catalogue, cad de la base
@@ -226,7 +229,8 @@ if (0) {
     echo "tuple="; print_r($tuple);
   }
 }
-else { // Navigation dans serveur / base=catalogue / schéma / table / description / contenu
+// Navigation dans serveur / base=catalogue / schéma / table / description / contenu (uniquement sur localhost)
+elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
   if (!($server = $_GET['server'] ?? null)) { // choix d'un des serveurs définis dans secret.inc.php
     $secrets = require(__DIR__.'/secret.inc.php');
     //print_r($secrets['sql']);

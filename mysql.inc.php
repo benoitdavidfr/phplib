@@ -11,7 +11,10 @@ doc: |
       chacun des n-uplets
     - pour les autres requêtes renvoie TRUE
 
-  Il existe un seul catalogue (au sens information_schema) par serveur.
+  Le script implémente comme test un navigateur dans les serveurs définis dans secret.inc.php
+  Pour des raisons de sécurité ces fonctionnalités ne sont disponibles que sur le serveur localhost
+  
+  Sur MySql, il n'existe qu'un seul catalogue (au sens information_schema) par serveur.
   Le schema information_schema contient notamment les tables:
     - schemata - liste des schema, cad des bases du serveur
     - tables - liste des tables
@@ -56,12 +59,12 @@ doc: |
 */
 class MySql implements Iterator {
   static $mysqli=null; // handle MySQL
-  static $server=null; // serveur MySql
-  static $database=null; // éventuellement la base ouverte
-  private $sql = ''; // la requête SQL pour pouvoir la rejouer
+  static string $server; // serveur MySql
+  static ?string $database; // éventuellement la base ouverte
+  private string $sql = ''; // la requête SQL pour pouvoir la rejouer
   private $result = null; // l'objet mysqli_result
-  private $ctuple = null; // le tuple courant ou null
-  private $first = true; // vrai ssi aucun rewind n'a été effectué
+  private ?array $ctuple = null; // le tuple courant ou null
+  private bool $first = true; // vrai ssi aucun rewind n'a été effectué
   
   static function open(string $params): void {
     /*PhpDoc: methods
@@ -97,7 +100,8 @@ class MySql implements Iterator {
     //    throw new Exception("Connexion MySQL impossible pour $server_name : ".mysqli_connect_error());
     if (mysqli_connect_error())
       throw new Exception("Erreur: dans MySql::open() connexion MySQL impossible sur $params");
-    if ($database && (($server == 'localhost') || preg_match('!^172\.17\.0\.[0-9]$!', $server))) {
+    if ($database && (($server == 'localhost') || preg_match('!^172\.17\.0\.[0-9]$!', $server))
+      && ($database <> 'information_schema')) {
       $sql_cr_db = "CREATE DATABASE IF NOT EXISTS `$database` DEFAULT CHARACTER SET utf8 COLLATE utf8_general_ci";
       if (!(self::$mysqli->query($sql_cr_db)))
         //throw new Exception ("Requete \"".$sql_cr_db."\" invalide: ".$mysqli->error);
@@ -225,7 +229,8 @@ if (0) {  // Test 2 rewind
     print_r($tuple);
   }
 }
-else { // Navigation dans serveur=catalogue / schema=base / table / description / contenu
+// Navigation dans serveur=catalogue / schema=base / table / description / contenu (uniquement sur localhost)
+elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
   if (!($server = $_GET['server'] ?? null)) { // les serveurs définis dans secret.inc.php
     $secrets = require(__DIR__.'/secret.inc.php');
     //print_r($secrets['sql']);
