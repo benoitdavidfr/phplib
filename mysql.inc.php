@@ -29,7 +29,33 @@ doc: |
 
   On peut définir un usage simplifié avec uniquement des index et clés primaines mono-attributs.
 
+  Différences entre les différentes versions et flavors:
+    MySql v5 (ancien serveur Docker):
+      - noms des champs de information_schema en minuscules
+      - fonction REGEXP_SUBSTR() et REGEXP_REPLACE() NON définies
+    MariaDB v5 (serveur Alwaysadata):
+      - noms des champs de information_schema en minuscules
+      - fonction REGEXP_SUBSTR() et REGEXP_REPLACE() définies, paramètres identifiés par \\1, \\2, ...
+    MySql v8 (nouveau serveur Docker)
+      - noms des champs de information_schema en majuscules
+      - fonction REGEXP_SUBSTR() et REGEXP_REPLACE() définies, paramètres idétenfiés par $1, $2, ...
+
+  A faire:
+    - faire marcher spatial_extension
 journal: |
+  30/1/2021:
+    - amélioration de spatial_extent pour qu'il fonctionne sur MySql 8
+  29/1/2021:
+    - chgt de version du serveur MySql @Docker, passage en 8 pour disposer de l'extension spatiale
+    - nécessité de gérer la géométrie en SRID 0 et pas en SRID 4326
+    - ajout de la méthode server_info() pour distinguer les différentes versions et MariaDB de MySql
+    - ajout de l'option 'columnNamesInLowercase' pour gérer les écarts entre MySql 5 et 8 sur information_schema
+  28/1/2021:
+    - chgt des URI
+      serveur: mysql://{user}(:{password})?@{server}    sans '/' à la fin
+      base:    mysql://{user}(:{password})?@{server}/{dbname}
+    - méthode de calcul de l'extension spatiale d'une colonne géométrique
+      + pour éviter d'avoir à la recalculer stockage dans une table spatial_extent dans la base courante
   24/1/2021:
     - évol. navigateur avec possibilité de définir une requête sql
   16/1/2021:
@@ -56,13 +82,19 @@ doc: |
   D'une part cette classe implémente en statique la connexion au serveur et l'exécution d'une requête Sql.
   D'autre part, pour les requêtes renvoyant un ensemble de n-uplets, un objet de la classe est créé
   qui peut être itéré pour obtenir les n-uplets.
+  Plus méthode de calcul de l'extension spatiale d'une colonne géométrique
+  et stockage dans une table spatial_extent pour éviter d'avoir à la recalculer.
 */
 class MySql implements Iterator {
+  const OGC_GEOM_TYPES = ['geometry','point','multipoint','linestring','multilinestring','polygon','multipolygon'];
+
   static $mysqli=null; // handle MySQL
   static string $server; // serveur MySql
   static ?string $database; // éventuellement la base ouverte
+  
   private string $sql = ''; // la requête SQL pour pouvoir la rejouer
   private $result = null; // l'objet mysqli_result
+  private array $options = []; // options: ['columnNamesInLowercase'=>bool]
   private ?array $ctuple = null; // le tuple courant ou null
   private bool $first = true; // vrai ssi aucun rewind n'a été effectué
   
@@ -122,6 +154,12 @@ class MySql implements Iterator {
     return self::$server;
   }
   
+  static function server_info(): string {
+    if (!self::$server)
+      throw new Exception("Erreur: dans MySql::server_info() server non défini");
+    return self::$mysqli->server_info;
+  }
+  
   static function database(): ?string {
     if (!self::$server)
       throw new Exception("Erreur: dans MySql::server() server non défini");
@@ -159,17 +197,18 @@ class MySql implements Iterator {
               and constraint_name='PRIMARY'
         where c.table_schema='$base' and c.table_name='$table'";
     $columns = [];
-    foreach(MySql::query($sql) as $tuple) {
+    foreach(MySql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
       //print_r($tuple);
       $columns[$tuple['column_name']] = $tuple;
     }
     return $columns;
   }
   
-  static function query(string $sql) { // exécute une requête MySQL, soulève une exception ou renvoie le résultat 
+  // exécute une requête MySQL, soulève une exception ou renvoie le résultat
+  static function query(string $sql, array $options=[]) { 
     /*PhpDoc: methods
     name: query
-    title: "static function query(string $sql)- exécute une requête MySQL"
+    title: "static function query(string $sql, array $options=[])- exécute une requête MySQL"
     doc: |
       exécute une requête MySQL, soulève une exception en cas d'erreur, sinon renvoie le résultat soit TRUE
       soit un objet MySql qui peut être itéré pour obtenir chaque n-uplet
@@ -185,12 +224,222 @@ class MySql implements Iterator {
     if ($result === TRUE)
       return TRUE;
     else
-      return new MySql($sql, $result);
+      return new MySql($sql, $result, $options);
   }
   
-  function __construct(string $sql, mysqli_result $result) {
+  static function getTuples(string $sql): array { // renvoie le résultat d'une requête sous la forme d'un array
+    /*PhpDoc: methods
+    name: getTuples
+    title: "static function getTuples(string $sql): array - renvoie le résultat d'une requête sous la forme d'un array"
+    doc: |
+      Plus adapté que query() quand on sait que le nombre de n-uplets retournés est faible
+    */
+    $tuples = [];
+    foreach (self::query($sql) as $tuple)
+      $tuples[] = $tuple;
+    return $tuples;
+  }
+  
+  // Calcul de l'extension spatiale d'une colonne géométrique, retourne [lonmin, latmin, lonmax, latmax]
+  static function spatialExtent(string $tableName, string $c): array {
+    /*PhpDoc: methods
+    name: spatialExtent
+    title: "static function spatialExtent(string $tableName, string $c): array - extension spatiale d'une colonne"
+    doc: |
+      Calcul de l'extension spatiale d'une colonne géométrique, retourne [lonmin, latmin, lonmax, latmax]
+      Stocke le résultat dans la table spatial_extent qui est créée si elle n'existe pas.
+      Code complexe du à l'absence de la fonction ST_Extent() présente sur PostGis.
+      Utilise la fonction ST_Envelope() sur chaque n-uplet puis une extraction des coordonnées par REGEXP
+      et enfin un agrégat sur la table.
+      ST_Envelope() ne donnant pas le même résultat sur MariaDB et MySql, le code est différent pour les 2.
+    */
+    try { // essaie de retrouver le résultat dans la table spatial_extent
+      $sql = "select ST_AsText(geom) geom from spatial_extent where table_name='$tableName' and column_name='$c'";
+      $tuples = MySql::getTuples($sql);
+      // 3 possibilités
+      //   1) la table n'existe pas et il y a une exception
+      //   2) la table existe mais ce tuple n'existe pas alors exécution du code après le catch
+      //   3) la table existe et ce tuple existe alors le code suivant est exécuté
+      if (count($tuples) == 1) {  // cas 3
+        $tuple = $tuples[0];
+        //echo "$tuple[geom]\n";
+        static $pattern = '!^POLYGON\(\(([-\d.]+) ([-\d.]+),[^,]+,([-\d.]+) ([-\d.]+),[^,]+,[^)]+\)\)$!';
+        if (!preg_match($pattern, $tuple['geom'], $matches))
+          throw new Exception("No match dans MySql::spatialExtent() sur $tuple[geom]");
+        return [(float)$matches[1], (float)$matches[2], (float)$matches[3], (float)$matches[4]];
+      }
+    }
+    catch (Exception $e) { // cas 1: Si la table n'existe pas alors elle est créée
+      $sql = "create table spatial_extent(
+        id int not null auto_increment primary key comment 'identifiant automatique',
+        table_name varchar(130) not null comment 'nom de la table',
+        column_name varchar(130) not null comment 'nom de la colonne géométrique',
+        geom polygon not null comment 'polygone constituant l''extension de la colonne',
+        unique names (table_name, column_name)
+      )
+      comment='Table stockant les extensions spatiales des autres tables de la base pour accélérer les requêtes,
+        table créée par mysql.inc.php le ".date(DATE_ATOM)."'";
+      Mysql::query($sql);
+    }
+    // cas 2: calcul de l'extension spatiale
+    // Le code n'est pas le même avec MariaDB et MySql 8 (il ne fonctionne pas du tout avec MySql 5)
+    if (preg_match('!MariaDB!', MySql::server_info())) // Serveur 5.5.5-10.4.17-MariaDB
+      $param = '\\\\'; // les paramètres sont identifiés par '\\\\1'
+    else // MySql 8
+      $param = '$'; // les paramètres sont identifiés par '$1'
+    try { // code avec agrégat par forme géom. - code correct sur '5.5.5-10.4.17-MariaDB' et MySql 8.0.23
+      if (preg_match('!MariaDB!', MySql::server_info())) { // Serveur MariaDB
+        $mariaDB = true;
+        $param = '\\\\'; // les paramètres sont identifiés par '\\\\1'
+      }
+      else { // MySql 8
+        $mariaDB = false;
+        $param = '$'; // les paramètres sont identifiés par '$1'
+      }
+      { // Première partie, requête sur POLYGON, code commun MariaDB / MySql 8
+        $sql = "
+          select count($c) count,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+              '${param}1')+0) xmin,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+              '${param}2')+0) ymin,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+              '${param}1')+0) xmax,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+              '${param}2')+0) ymax
+          from $_GET[table]
+        "
+         .(!$mariaDB ? "where ST_AsText(ST_Envelope($c)) REGEXP '^POLYGON'\n" : ''); 
+        $tuple = MySql::getTuples($sql)[0];
+        $extent = [];
+        if ($tuple['count']) {
+          $extent = [(float)$tuple['xmin'], (float)$tuple['ymin'], (float)$tuple['xmax'], (float)$tuple['ymax']];
+        }
+      }
+      if ($mariaDB) {
+        $wkt = "POLYGON(($extent[0] $extent[1],$extent[0] $extent[3],$extent[2] $extent[3],"
+          ."$extent[2] $extent[1],$extent[0] $extent[1]))";
+        $sql = "insert into spatial_extent(table_name, column_name, geom)\n"
+          ."values ('$tableName', '$c',  ST_GeomFromText('$wkt'))";
+        MySql::query($sql);
+        return $extent;
+      }
+      // En MySql 8 ST_Envelope() peut donner un LINESTRING ou un POINT
+      { // Deuxième partie, requête sur LINESTRING, uniquement MySql 8
+        $sql = "
+          select count($c) count,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}1')+0) x1min,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}2')+0) y1min,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}1')+0) x2min,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}2')+0) y2min,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}1')+0) x1max,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}2')+0) y1max,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}1')+0) x2max,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}2')+0) y2max
+          from $_GET[table]
+          where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+        ";
+        $tuple = MySql::getTuples($sql)[0];
+        if ($tuple['count']) {
+          if ($extent) { // combinaison des 2 extents
+            $extent[0] = min($extent[0], $tuple['x1min'], $tuple['x2min']);
+            $extent[1] = min($extent[1], $tuple['y1min'], $tuple['y2min']);
+            $extent[2] = max($extent[2], $tuple['x1max'], $tuple['x2max']);
+            $extent[3] = max($extent[3], $tuple['y1max'], $tuple['y2max']);
+          }
+          else { // utilisation de ce 2nd extent
+            $extent = [
+              min($tuple['x1min'], $tuple['x2min']),
+              min($tuple['y1min'], $tuple['y2min']),
+              max($tuple['x1max'], $tuple['x2max']),
+              max($tuple['y1max'], $tuple['y2max']),
+            ];
+          }
+        }
+      }
+      { // Troisième partie, requête sur POINT, uniquement MySql 8
+        $sql = "
+          select count($c) count,
+            min(REGEXP_REPLACE(
+              ST_AsText($c),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}1')+0) xmin,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}2')+0) ymin,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}1')+0) xmax,
+            max(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}2')+0) ymax
+          from $_GET[table]
+          where ST_AsText(ST_Envelope($c)) REGEXP '^POINT'
+        ";
+        $tuple = MySql::getTuples($sql)[0];
+        if ($tuple['count']) {
+          //echo "POINT> $tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+          if ($extent) { // combinaison avec l'extent précédent 
+            $extent[0] = min($extent[0], $tuple['xmin']);
+            $extent[1] = min($extent[1], $tuple['ymin']);
+            $extent[2] = max($extent[2], $tuple['xmax']);
+            $extent[3] = max($extent[3], $tuple['ymax']);
+            echo 'extent='; print_r($extent);
+          }
+          else
+            $extent = [(float)$tuple['xmin'], (float)$tuple['ymin'], (float)$tuple['xmax'], (float)$tuple['ymax']];
+        }
+      }
+      $wkt = "POLYGON(($extent[0] $extent[1],$extent[0] $extent[3],$extent[2] $extent[3],"
+        ."$extent[2] $extent[1],$extent[0] $extent[1]))";
+      $sql = "insert into spatial_extent(table_name, column_name, geom)\n"
+        ."values ('$tableName', '$c',  ST_GeomFromText('$wkt'))";
+      MySql::query($sql);
+      return $extent;
+    } catch (Exception $e) { // Probablement fonctions REGEXP non définies en MySql 5
+      return [];
+    }
+  }
+  
+  function __construct(string $sql, mysqli_result $result, array $options=[]) {
     $this->sql = $sql;
     $this->result = $result;
+    $this->options = $options;
     $this->first = true;
   }
   
@@ -205,7 +454,17 @@ class MySql implements Iterator {
     $this->next();
   }
   
-  function current(): array { return $this->ctuple; }
+  function current(): array {
+    if (!($this->options['columnNamesInLowercase'] ?? null)) {
+      return $this->ctuple;
+    }
+    else {
+      $tuple = [];
+      foreach ($this->ctuple as $key => $val)
+        $tuple[strtolower($key)] = $val;
+      return $tuple;
+    }
+  }
   function key(): int { return 0; }
   function next(): void { $this->ctuple = $this->result->fetch_array(MYSQLI_ASSOC); }
   function valid(): bool { return ($this->ctuple <> null); }
@@ -242,32 +501,35 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
     die();
   }
   elseif (!($schema = $_GET['schema'] ?? null)) { // les schemas (=base) du serveur
-    echo "Schemas/base de mysql://$server:\n";
+    echo "mysql://$server:\n";
     MySql::open("mysql://$server");
+    echo "  server_info: ", MySql::server_info(),"\n";
+    echo "  Schemas/base:\n";
     $sql = "select schema_name from information_schema.schemata";
     $url = "&amp;server=$server";
-    foreach (MySql::query($sql) as $tuple) {
-      echo "  - <a href='?schema=$tuple[schema_name]$url'>$tuple[schema_name]</a>\n";
+    foreach (MySql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
+      //print_r($tuple);
+      echo "    - <a href='?schema=$tuple[schema_name]$url'>$tuple[schema_name]</a>\n";
     }
     die();
   }
   elseif (!($table = $_GET['table'] ?? null)) { // les tables du schema
-    echo "Tables de mysql:$server$schema:\n";
-    MySql::open("mysql://$server$schema");
+    echo "Tables de mysql:$server/$schema:\n";
+    MySql::open("mysql://$server/$schema");
     $sql = "select table_name from information_schema.tables where table_schema='$schema'";
     $url = "&amp;schema=$schema&amp;server=".urlencode($server);
-    foreach (MySql::query($sql) as $tuple) {
+    foreach (MySql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
       echo "  - <a href='?table=$tuple[table_name]$url'>$tuple[table_name]</a>\n";
     }
     die();
   }
-  elseif (null === ($offset = $_GET['offset'] ?? null)) { // Description de la table
-    echo "Table mysql://$server$schema/$table:\n";
+  elseif (!isset($_GET['offset']) && !isset($_GET['action'])) { // Description de la table
+    echo "Table mysql://$server/$schema/$table:\n";
     echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table",
       "&amp;schema=$schema&amp;server=".urlencode($_GET['server'])."'>",
       "Affichage du contenu de la table</a>.\n";
     echo "  - Description de la table:\n";
-    MySql::open("mysql://$server$schema");
+    MySql::open("mysql://$server/$schema");
     $sql = "select c.ordinal_position, c.column_name, c.column_comment, c.data_type, c.character_maximum_length,
             k.constraint_name
           from information_schema.columns c
@@ -275,13 +537,17 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
             on k.table_schema=c.table_schema and k.table_name=c.table_name and k.column_name=c.column_name
               and constraint_name='PRIMARY'
         where c.table_schema='$schema' and c.table_name='$table'";
-    foreach (MySql::query($sql) as $tuple) {
+    foreach (MySql::query($sql, ['columnNamesInLowercase'=> true] ) as $tuple) {
       $primary_key = ($tuple['constraint_name'] == 'PRIMARY') ? ' (primary key)' : '';
       echo "    $tuple[ordinal_position]:\n";
       echo "      id: $tuple[column_name]$primary_key\n";
       echo $tuple['column_comment'] ? "      description: $tuple[column_comment]\n" : '';
       if ($tuple['data_type']=='varchar')
         echo "      data_type: $tuple[data_type]($tuple[character_maximum_length])\n";
+      elseif (in_array($tuple['data_type'], MySql::OGC_GEOM_TYPES))
+        echo "      data_type: $tuple[data_type] ",
+          "(<a href='?action=extent&amp;column=$tuple[column_name]&amp;table=$table",
+          "&amp;schema=$schema&amp;server=".urlencode($_GET['server'])."'>extent</a>)\n";
       else
         echo "      data_type: $tuple[data_type]\n";
       if (0)
@@ -289,20 +555,431 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
     }
     die();
   }
+  elseif (($_GET['action'] ?? null) == 'extent') {
+    MySql::open("mysql://$server/$schema");
+    //echo MySql::getTuples("select count(*) count from $_GET[table]")[0]['count'],"\n"; die();
+    // Divers tests pour calculer le spatial_extent
+    if (0) { // explosion mémoire 
+      $sql = "select ST_AsGeoJSON(ST_Envelope($_GET[column])) enveloppe from $_GET[table]";
+      $no = 0;
+      foreach (MySql::query($sql) as $tuple) {
+        //echo "$tuple[enveloppe]\n";
+        $envCoords = json_decode($tuple['enveloppe'], true)['coordinates'];
+        //echo "xmin=",$envCoords[0][0][0],", ymin=",$envCoords[0][0][1],", ",
+        //     "xmax=",$envCoords[0][2][0],", ymax=",$envCoords[0][2][1],"\n";
+        if ($no++ === 0) {
+          $xmin = $envCoords[0][0][0];
+          $ymin = $envCoords[0][0][1];
+          $xmax = $envCoords[0][2][0];
+          $ymax = $envCoords[0][2][1];
+        }
+        else {
+          if ($envCoords[0][0][0] < $xmin)
+            $xmin = $envCoords[0][0][0];
+          if ($envCoords[0][0][1] < $ymin)
+            $ymin = $envCoords[0][0][1];
+          if ($envCoords[0][2][0] > $xmax)
+            $xmax = $envCoords[0][2][0];
+          if ($envCoords[0][2][1] > $ymax)
+            $ymax = $envCoords[0][2][1];
+        }
+        //if ($no >= 10) die();
+      }
+      echo "ext = [$xmin, $ymin, $xmax, $ymax]\n";
+    }
+    elseif (0) { // sans agrégat, différentes formes géom.
+      echo "Test ",MySql::server_info(),"\n";
+      $c = $_GET['column'];
+      if (preg_match('!MariaDB!', MySql::server_info())) // Serveur 5.5.5-10.4.17-MariaDB
+        $param = '\\\\'; // les paramètres sont identifiés par '\\\\1'
+      else // MySql 8
+        $param = '$'; // les paramètres sont identifiés par '$1'
+      $sql = "
+        ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+              '${param}1') xmin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+              '${param}2') ymin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+              '${param}1') xmax,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+              '${param}2') ymax
+          from $_GET[table]
+          where ST_AsText(ST_Envelope($c)) REGEXP '^POLYGONxx'
+        )
+        union
+        ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}1') xmin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}2') ymin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}1') xmax,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}2') ymax
+          from $_GET[table]
+          where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+        )
+        union
+        ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}1') xmin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+              '${param}2') ymin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}1') xmax,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+              '${param}2') ymax
+          from $_GET[table]
+          where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+        )
+        union
+        ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+            REGEXP_REPLACE(
+              ST_AsText($c),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}1') xmin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}2') ymin,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}1') xmax,
+            REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POINT.([-0-9.]+) ([-0-9.]+).$',
+              '${param}2') ymax
+          from $_GET[table]
+          where ST_AsText($c) REGEXP '^POINT'
+        )
+        limit 500";
+      echo "$sql\n";
+      $n=0;
+      foreach (MySql::query($sql) as $tuple) {
+        echo "**$n; $tuple[id_rte500]; $tuple[enveloppe]; ",
+             "$tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+        $n++;
+      }
+    }
+    elseif (0) { // avec agrégat sur table dérivée, complexe et buggé 
+      echo "Test pour MySql 8 / ",MySql::server_info(),"\n";
+      if (preg_match('!MariaDB!', MySql::server_info())) // Serveur 5.5.5-10.4.17-MariaDB
+        $param = '\\\\'; // les paramètres sont identifiés par '\\\\1'
+      else // MySql 8
+        $param = '$'; // les paramètres sont identifiés par '$1'
+      $c = $_GET['column'];
+      $sql = "
+        select min(bbox.xmin) xmin, min(bbox.ymin) ymin, max(bbox.xmax) xmax, max(bbox.ymax) ymax
+        from
+        (
+          ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+                '${param}1') xmin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+                '${param}2') ymin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+                '${param}1') xmax,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+                '${param}2') ymax
+            from $_GET[table]
+            where ST_AsText(ST_Envelope($c)) REGEXP '^POLYGON'
+          )
+          union
+          ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+                '${param}1') xmin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+                '${param}2') ymin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+                '${param}1') xmax,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+                '${param}2') ymax
+            from $_GET[table]
+            where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+          )
+          union
+          ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+                '${param}1') xmin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+                '${param}2') ymin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+                '${param}1') xmax,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+                '${param}2') ymax
+            from $_GET[table]
+            where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+          )
+          union
+          ( select id_rte500, ST_AsText(ST_Envelope($c)) enveloppe,
+              REGEXP_REPLACE(
+                ST_AsText($c),
+                '^POINT.([-0-9.]+) ([-0-9.]+).$',
+                '${param}1') xmin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POINT.([-0-9.]+) ([-0-9.]+).$',
+                '${param}2') ymin,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POINT.([-0-9.]+) ([-0-9.]+).$',
+                '${param}1') xmax,
+              REGEXP_REPLACE(
+                ST_AsText(ST_Envelope($c)),
+                '^POINT.([-0-9.]+) ([-0-9.]+).$',
+                '${param}2') ymax
+            from $_GET[table]
+            where ST_AsText($c) REGEXP '^POINTxx'
+          )
+        ) bbox";
+      foreach (MySql::query($sql) as $tuple) {
+        echo "$tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+      }
+    }
+    elseif (0) { // avec agrégat par forme géom. - code correct sur '5.5.5-10.4.17-MariaDB' et MySql 8.0.23
+      echo "Test 3 ",MySql::server_info(),"\n";
+      $c = $_GET['column'];
+      if (preg_match('!MariaDB!', MySql::server_info())) // Serveur 5.5.5-10.4.17-MariaDB
+        $param = '\\\\'; // les paramètres sont identifiés par '\\\\1'
+      else // MySql 8
+        $param = '$'; // les paramètres sont identifiés par '$1'
+      $sql = "
+        select count($c) count,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+            '${param}1')+0) xmin,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+            '${param}2')+0) ymin,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '${param}1')+0) xmax,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '${param}2')+0) ymax
+        from $_GET[table]
+        where ST_AsText(ST_Envelope($c)) REGEXP '^POLYGON'
+      ";
+      $extent = [];
+      $tuple = MySql::getTuples($sql)[0];
+      if ($tuple['count']) {
+        echo "POLYGON> $tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+        $extent = $tuple;
+      }
+      else
+        echo "No Polygon\n";
+      $sql = "
+        select count($c) count,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+            '${param}1')+0) x1min,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+            '${param}2')+0) y1min,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+            '${param}1')+0) x2min,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+            '${param}2')+0) y2min,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+            '${param}1')+0) x1max,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.([-0-9.]+) ([-0-9.]+),[-0-9. ]+.$',
+            '${param}2')+0) y1max,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+            '${param}1')+0) x2max,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
+            '${param}2')+0) y2max
+        from $_GET[table]
+        where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
+      ";
+      $tuple = MySql::getTuples($sql)[0];
+      if ($tuple['count']) {
+        echo "LINESTRING> $tuple[x1min]; $tuple[y1min]; $tuple[x2min]; $tuple[y2min];",
+             " $tuple[x1max]; $tuple[y1max]; $tuple[x2max]; $tuple[y2max];\n";
+        if ($extent) {
+          $extent['xmin'] = min($extent['xmin'], $tuple['x1min'], $tuple['x2min']);
+          $extent['ymin'] = min($extent['ymin'], $tuple['y1min'], $tuple['y2min']);
+          $extent['xmax'] = max($extent['xmax'], $tuple['x1max'], $tuple['x2max']);
+          $extent['ymax'] = max($extent['ymax'], $tuple['y1max'], $tuple['y2max']);
+        }
+        else {
+          $extent['xmin'] = min($tuple['x1min'], $tuple['x2min']);
+          $extent['ymin'] = min($tuple['y1min'], $tuple['y2min']);
+          $extent['xmax'] = max($tuple['x1max'], $tuple['x2max']);
+          $extent['ymax'] = max($tuple['y1max'], $tuple['y2max']);
+        }
+        echo 'extent='; print_r($extent);
+      }
+      else
+        echo "No LINESTRING\n";
+      $sql = "
+        select count($c) count,
+          min(REGEXP_REPLACE(
+            ST_AsText($c),
+            '^POINT.([-0-9.]+) ([-0-9.]+).$',
+            '${param}1')+0) xmin,
+          min(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POINT.([-0-9.]+) ([-0-9.]+).$',
+            '${param}2')+0) ymin,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POINT.([-0-9.]+) ([-0-9.]+).$',
+            '${param}1')+0) xmax,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POINT.([-0-9.]+) ([-0-9.]+).$',
+            '${param}2')+0) ymax
+        from $_GET[table]
+        where ST_AsText(ST_Envelope($c)) REGEXP '^POINT'
+      ";
+      $tuple = MySql::getTuples($sql)[0];
+      if ($tuple['count']) {
+        echo "POINT> $tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+        if ($extent) {
+          $extent['xmin'] = min($extent['xmin'], $tuple['xmin']);
+          $extent['ymin'] = min($extent['ymin'], $tuple['ymin']);
+          $extent['xmax'] = max($extent['xmax'], $tuple['xmax']);
+          $extent['ymax'] = max($extent['ymax'], $tuple['ymax']);
+          echo 'extent='; print_r($extent);
+        }
+        else
+          $extent = $tuple;
+      }
+      else
+        echo "No POINT\n";
+      echo 'extent='; print_r($extent);
+    }
+    elseif (0) { // uniquement sur MariaDB - utilisation de REGEXP_SUBSTR() et REGEXP_REPLACE()
+      // pour extraire xmin,ymin,xmax,ymax de ST_AsText(ST_Envelope()) 
+      // Test des expressions tuple par tuple
+      $c = $_GET['column'];
+      $sql = "
+        select ST_AsText(ST_Envelope($c)) enveloppe,
+          REGEXP_SUBSTR(ST_AsText(ST_Envelope($c)), '[0-9.-]+') xmin,
+          REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9.]+ ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+            '\\\\1') ymin,
+          REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '\\\\1') xmax,
+          REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '\\\\2') ymax
+        from $_GET[table]
+        limit 50";
+      foreach (MySql::query($sql) as $tuple) {
+        echo "$tuple[enveloppe]; $tuple[xmin]; $tuple[ymin]; $tuple[xmax]; $tuple[ymax];\n";
+      }
+    }
+    elseif (0) { // uniquement sur MariaDB, utilisation des expressions avec une agrégation pour obtenir un résultat
+      $c = $_GET['column'];
+      $sqlagg = "
+        select 
+          min(REGEXP_SUBSTR(ST_AsText(ST_Envelope($c)), '[-0-9.]+')+0) xmin,
+            min(REGEXP_REPLACE(
+              ST_AsText(ST_Envelope($c)),
+              '^POLYGON..[-0-9.]+ ([-0-9.]+),[-0-9. ]+,[-0-9. ]+,[-0-9. ]+,[-0-9. ]+..$',
+              '\\\\1')+0) ymin,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '\\\\1')+0) xmax,
+          max(REGEXP_REPLACE(
+            ST_AsText(ST_Envelope($c)),
+            '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
+            '\\\\2')+0) ymax
+        from $_GET[table]";
+      $tuple = MySql::getTuples($sqlagg)[0];
+      echo "$tuple[xmin];$tuple[xmin2];$tuple[ymin];$tuple[xmax];$tuple[ymax];\n";
+    }
+    elseif (1) { // utilisation de la fonction définitive
+      echo 'extension=',json_encode(MySql::spatialExtent($_GET['table'], $_GET['column']));
+    }
+    die();
+  }
   else { // affichage du contenu de la table à partir de offset
-    $offset = (int)$offset;
+    $offset = (int) $_GET['offset'];
     $limit = (int) ($_GET['limit'] ?? 20);
-    MySql::open("mysql://$server$schema");
+    MySql::open("mysql://$server/$schema");
     $columns = [];
     foreach (MySql::tableColumns($table) as $cname => $column) {
-      if ($column['data_type']=='geometry')
+      if (in_array($column['data_type'], MySql::OGC_GEOM_TYPES))
         $columns[] = "ST_AsGeoJSON($cname) $cname";
       else
         $columns[] = $cname;
     }
     $sql = $_GET['sql'] ?? "select ".implode(', ', $columns)."\nfrom $table";
-    if (substr($sql, 0, 7) <> 'select ')
-      throw new Exception("Requête \"$sql\" interdite");
     $url = "table=$table&amp;schema=$schema&amp;server=".urlencode($_GET['server']);
     echo "</pre>",
       "<h2>mysql://$server$schema/$table</h2>\n",

@@ -95,8 +95,11 @@ class Schema {
       throw new \Exception("Erreur: uri $catalogUri incorrecte");
     Sql::open($catalogUri);
     $dict = [];
-    foreach (Sql::query('select schema_name from information_schema.schemata') as $tuple)
+    $sql = 'select schema_name from information_schema.schemata';
+    foreach (Sql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
+      //print_r($tuple);
       $dict[$tuple['schema_name']] = "$catalogUri/$tuple[schema_name]";
+    }
     return $dict;
   }
   
@@ -123,17 +126,14 @@ class Schema {
       ."where table_schema='$this->name'"
       .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '')
       .(isset($options['table_types']) ? " and table_type in ('".implode("','", $options['table_types'])."')" : '');
-    foreach (Sql::query($sql) as $tuple) {
+    foreach (Sql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
       $tables[$tuple['table_name']] = $tuple;
     }
     $cols = [];
     $sql = "select *\nfrom information_schema.columns\n"
       ."where table_schema='$this->name'"
       .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '');
-    foreach (Sql::query($sql) as $tuple0) {
-      $tuple = [];
-      foreach ($tuple0 as $key => $val)
-        $tuple[strtolower($key)] = $val;
+    foreach (Sql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
       //print_r($tuple);
       if (isset($tables[$tuple['table_name']]))
         $cols[$tuple['table_name']][$tuple['ordinal_position']] = $tuple;
@@ -244,14 +244,18 @@ class Table {
     ];
   }
   
-  function listOfColumnOfType(string $dataType): array {
+  // liste des colonnes d'un des types sous la forme [{name} => \Sql\Column]
+  function listOfColumnOfOneOfTheTypes(array $dataTypes): array {
     $list = [];
     foreach ($this->columns as $cname => $column) {
-      if ($column->dataType == $dataType)
+      if (in_array($column->dataType, $dataTypes))
         $list[$cname] = $column;
     }
     return $list;
   }
+  
+  // liste des colonnes géométriques
+  function listOfGeometryColumns(): array { return $this->listOfColumnOfOneOfTheTypes(Column::OGC_GEOM_TYPES); }
   
   function pkeyCol(): ?Column {
     foreach ($this->columns as $cname => $column) {
@@ -283,6 +287,9 @@ doc: |
 methods:
 */
 class Column {
+  // Types géométriques pour MySql
+  const OGC_GEOM_TYPES = ['geometry','point','multipoint','linestring','multilinestring','polygon','multipolygon'];
+
   protected Table $table; // table à laquelle la colonne appartient
   protected string $name;
   protected string $dataType; // motif à définir
@@ -340,6 +347,8 @@ class Column {
       //'info'=> $this->info,
     ];
   }
+  
+  function hasGeometryType(): bool { return in_array($this->dataType, self::OGC_GEOM_TYPES); }
 };
 
 

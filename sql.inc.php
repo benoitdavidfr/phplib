@@ -1,7 +1,7 @@
 <?php
 /*PhpDoc:
 name: sql.inc.php
-title: sql.inc.php - classes Sql utilisée pour exécuter des requêtes Sql sur MySql ou PgSql
+title: sql.inc.php - classe Sql utilisée pour exécuter des requêtes Sql sur MySql ou PgSql
 includes: [ mysql.inc.php, pgsql.inc.php ]
 classes:
 doc: |
@@ -103,7 +103,7 @@ class Sql {
     
   /*PhpDoc: methods
   name: query
-  title: "static function query($sql) - éxécution d'une requête"
+  title: "static function query(string|array $sql, array $options=[]) - éxécution d'une requête"
   doc: |
     La requête est soit une chaine soit une liste d'éléments,
     chacun étant une chaine ou un dictionnaire utilisant comme clé l'id du software.
@@ -113,13 +113,13 @@ class Sql {
     pour obtenir chacun des n-uplets
     sinon renvoie TRUE
   */
-  static function query(string|array $sql) {
+  static function query(string|array $sql, array $options=[]) {
     if (!self::$software)
       throw new Exception('Erreur: dans Sql::query(), software non défini');
     if (is_string($sql))
-      return (self::$software)::query($sql);
+      return (self::$software)::query($sql, $options);
     elseif (is_array($sql))
-      return (self::$software)::query(self::toString($sql));
+      return (self::$software)::query(self::toString($sql, $options));
     else
       throw new Exception('Erreur: dans Sql::query()');
   }

@@ -22,6 +22,12 @@ doc: |
     - pg_indexes - index avec sa définition
 
 journal: |
+  29/1/2021:
+    - chgt des URI
+      serveur: pgsql://{user}(:{passwd})?@{server}(:{port})?  sans '/' à la fin
+      base: pgsql://{user}(:{passwd})?@{server}(:{port})?/{dbname}
+      schéma: pgsql://{user}(:{passwd})?@{server}(:{port})?/{dbname}/{schema}
+    - ajout méthode PgSql::pg_version()
   16/1/2021:
     - ajout de champs à PgSql
     - ajout de la méthode PgSql::tableColumns()
@@ -34,6 +40,9 @@ journal: |
 includes:
   - secret.inc.php
 */
+require_once __DIR__.'/../geovect/vendor/autoload.php';
+
+use Symfony\Component\Yaml\Yaml;
 
 /*PhpDoc: classes
 name: PgSql
@@ -93,7 +102,7 @@ class PgSql implements Iterator {
       //echo "conn_string=$conn_string\n";
     }
     else
-      throw new Exception("Erreur: dans PgSql::open() params \"".$conn_string."\" incorrect");
+      throw new Exception("Erreur: dans PgSql::open() params \"$params\" incorrect");
     self::$server = $server;
     self::$database = $database;
     self::$schema = $schema;
@@ -123,6 +132,8 @@ class PgSql implements Iterator {
   }*/
   
   static function close(): void { pg_close(); }
+  
+  static function pg_version(): array { return pg_version(self::$connection); }
   
   static function tableColumns(string $table, ?string $schema=null): ?array { // liste des colonnes de la table
     /*PhpDoc: methods
@@ -173,7 +184,7 @@ class PgSql implements Iterator {
     return $tuples;
   }
 
-  static function query(string $sql) {
+  static function query(string $sql, array $options=[]) {
     /*PhpDoc: methods
     name: query
     title: static function query(string $sql) - lance une requête et retourne éventuellement un itérateur
@@ -242,18 +253,19 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
     die();
   }
   elseif (!($base = $_GET['base'] ?? null)) { // choix d'une des bases=catalogues du serveur
-    echo "Bases de pgsql://$server:\n";
-    PgSql::open("pgsql://${server}postgres");
+    PgSql::open("pgsql://${server}/postgres");
+    echo Yaml::dump(["pgsql://$server" => ['pg_version'=> PgSql::pg_version()]], 3, 2);
+    echo "  Bases:\n";
     $sql = "select * from pg_database";
     foreach (PgSql::query($sql) as $tuple) {
-      echo "  - <a href='?base=$tuple[datname]&amp;server=",urlencode($server),"'>$tuple[datname]</a>\n";
+      echo "    - <a href='?base=$tuple[datname]&amp;server=",urlencode($server),"'>$tuple[datname]</a>\n";
       //print_r($tuple);
     }
     die();
   }
   elseif (!($schema = $_GET['schema'] ?? null)) { // choix d'un des schémas de la base
-    echo "Schémas de la base pgsql://$server$base:\n";
-    PgSql::open("pgsql://$server$base");
+    echo "Schémas de la base pgsql://$server/$base:\n";
+    PgSql::open("pgsql://$server/$base");
     $sql = "select schema_name from information_schema.schemata";
     $url = "base=$base&amp;server=".urlencode($server);
     foreach (PgSql::query($sql) as $tuple) {
@@ -262,8 +274,8 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
     die();
   }
   elseif (!($table = $_GET['table'] ?? null)) { // choix d'une des tables du schema
-    echo "Tables de pgsql:$server$base/$schema:\n";
-    PgSql::open("pgsql://$server$base/$schema");
+    echo "Tables de pgsql:$server/$base/$schema:\n";
+    PgSql::open("pgsql://$server/$base/$schema");
     $sql = "select table_name from information_schema.tables
         where table_catalog='$base' and table_schema='$schema'";
     //$sql = "select * from INFORMATION_SCHEMA.TABLES";
@@ -275,11 +287,11 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
     die();
   }
   elseif (null === ($offset = $_GET['offset'] ?? null)) { // Description de la table
-    echo "Table pgsql://$server$base/$schema/$table:\n";
+    echo "Table pgsql://$server/$base/$schema/$table:\n";
     echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table&amp;schema=$schema&amp;base=$base",
       "&amp;server=".urlencode($server),"'>Affichage du contenu de la table</a>.\n";
     echo "  - Description de la table:\n";
-    PgSql::open("pgsql://$server$base/$schema");
+    PgSql::open("pgsql://$server/$base/$schema");
     $sql = "select c.ordinal_position, c.column_name, c.data_type, c.character_maximum_length, k.constraint_name
           from information_schema.columns c
           left join information_schema.key_column_usage k
@@ -302,7 +314,7 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
   }
   else { // affichage du contenu de la table à partir de offset
     $limit = (int)($_GET['limit'] ?? 20);
-    PgSql::open("pgsql://$server$base/$schema");
+    PgSql::open("pgsql://$server/$base/$schema");
     //print_r(PgSql::tableColumns($table));
     $columns = [];
     foreach (PgSql::tableColumns($table) as $cname => $column) {
