@@ -119,7 +119,7 @@ class Sql {
     if (is_string($sql))
       return (self::$software)::query($sql, $options);
     elseif (is_array($sql))
-      return (self::$software)::query(self::toString($sql, $options));
+      return (self::$software)::query(self::toString($sql), $options);
     else
       throw new Exception('Erreur: dans Sql::query()');
   }

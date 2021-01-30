@@ -122,11 +122,18 @@ class Schema {
     $cols = []; // [table_name => [...]]
     Sql::open($uri);
     $tables = [];
-    $sql = "select table_name, table_type \nfrom information_schema.tables\n"
-      ."where table_schema='$this->name'"
-      .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '')
-      .(isset($options['table_types']) ? " and table_type in ('".implode("','", $options['table_types'])."')" : '');
+    $sql = [
+      "select table_name, table_type",
+      [
+        'MySql'=> ', table_comment',
+      ],
+      "\nfrom information_schema.tables",
+      "\nwhere table_schema='$this->name'"
+        .(isset($options['table_names']) ? " and table_name in ('".implode("','", $options['table_names'])."')" : '')
+        .(isset($options['table_types']) ? " and table_type in ('".implode("','", $options['table_types'])."')" : ''),
+    ];
     foreach (Sql::query($sql, ['columnNamesInLowercase'=> true]) as $tuple) {
+      //print_r($tuple);
       $tables[$tuple['table_name']] = $tuple;
     }
     $cols = [];
@@ -188,6 +195,7 @@ doc: |
     - Schema $schema; // schema auquel appartient la table
     - string $name;
     - string $type; // 'BASE TABLE' | 'VIEW' | 'SYSTEM VIEW'
+    - string $comment; // commentaire associé, uniquement en MySql
     - array $columns; // dict. des colonnes indexé par le nom de colonne dans l'ordre de définition
 
   Un objet peut être transformé en array par la méthode asArray()
@@ -197,12 +205,14 @@ class Table {
   protected Schema $schema; // schema auquel appartient la table
   protected string $name;
   protected string $type; // 'BASE TABLE' | 'VIEW' | 'SYSTEM VIEW'
+  protected string $comment; // commentaire associé, uniquement en MySql
   protected array $columns; // dict. des colonnes indexé par le nom de colonne dans l'ordre de définition
   
   function __construct(Schema $schema, array $tableInfo, array $cols, array $indexes) {
     $this->schema = $schema;
     $this->name = $tableInfo['table_name'];
     $this->type = $tableInfo['table_type'];
+    $this->comment = $tableInfo['table_comment'] ?? '';
     foreach ($cols as $col)
       $column_key[$col['column_name']] = '';
     foreach ($indexes as $indexName => $indexDef) { /*PgSql*/
@@ -238,10 +248,11 @@ class Table {
   function asArray(): array {
     foreach ($this->columns as $cname => $column)
       $cols[$cname] = $column->asArray();
-    return [
-      'type'=> $this->type,
-      'columns'=> $cols,
-    ];
+    $array = ['type'=> $this->type];
+    if ($this->comment)
+      $array['comment'] = $this->comment;
+    $array['columns'] = $cols;
+    return $array;
   }
   
   // liste des colonnes d'un des types sous la forme [{name} => \Sql\Column]
@@ -484,15 +495,15 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
     $schema = new Schema($schema);
     foreach ($schema->tables as $table_name => $table)
       echo "  - <a href='?table=$table_name&amp;schema=".urlencode($_GET['schema'])."'>$table_name</a>\n";
+    //print_r($schema);
     die();
   }
   elseif (null === ($offset = $_GET['offset'] ?? null)) { // Description de la table
     echo "Table $schema/$table:\n";
-    echo "  - <a href='?offset=0&amp;limit=20&amp;table=$table&amp;schema=",urlencode($schema),"'>",
+    echo "<a href='?offset=0&amp;limit=20&amp;table=$table&amp;schema=",urlencode($schema),"'>",
         "Affichage du contenu de la table</a>.\n";
-    echo "  - Description de la table:\n";
     $schema = new Schema($schema, ['table_names'=> [$table]]);
-    echo Yaml::dump($schema->tables[$table]->asArray(), 10, 2);
+    echo Yaml::dump(['schema'=> $schema->tables[$table]->asArray()], 10, 2, Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK);
     die();
   }
   else { // affichage du contenu de la table à partir de offset
@@ -502,7 +513,7 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
       $schema = new Schema($schema, ['table_names'=> [$table]]);
       $columns = [];
       foreach ($schema->tables[$table]->columns as $cname => $column) {
-        if ($column->dataType == 'geometry')
+        if ($column->hasGeometryType())
           $columns[] = "ST_AsGeoJSON($cname) $cname";
         else
           $columns[] = $cname;

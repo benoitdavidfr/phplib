@@ -247,14 +247,15 @@ class MySql implements Iterator {
     title: "static function spatialExtent(string $tableName, string $c): array - extension spatiale d'une colonne"
     doc: |
       Calcul de l'extension spatiale d'une colonne géométrique, retourne [lonmin, latmin, lonmax, latmax]
-      Stocke le résultat dans la table spatial_extent qui est créée si elle n'existe pas.
+      Stocke le résultat dans la table mysql_spatial_extent créée si elle n'existe pas.
       Code complexe du à l'absence de la fonction ST_Extent() présente sur PostGis.
       Utilise la fonction ST_Envelope() sur chaque n-uplet puis une extraction des coordonnées par REGEXP
       et enfin un agrégat sur la table.
       ST_Envelope() ne donnant pas le même résultat sur MariaDB et MySql, le code est différent pour les 2.
     */
     try { // essaie de retrouver le résultat dans la table spatial_extent
-      $sql = "select ST_AsText(geom) geom from spatial_extent where table_name='$tableName' and column_name='$c'";
+      $sql = "select ST_AsText(geom) geom from mysql_spatial_extent\n".
+        "where table_name='$tableName' and column_name='$c'";
       $tuples = MySql::getTuples($sql);
       // 3 possibilités
       //   1) la table n'existe pas et il y a une exception
@@ -270,15 +271,16 @@ class MySql implements Iterator {
       }
     }
     catch (Exception $e) { // cas 1: Si la table n'existe pas alors elle est créée
-      $sql = "create table spatial_extent(
+      $sql = "create table mysql_spatial_extent(
         id int not null auto_increment primary key comment 'identifiant automatique',
         table_name varchar(130) not null comment 'nom de la table',
         column_name varchar(130) not null comment 'nom de la colonne géométrique',
         geom polygon not null comment 'polygone constituant l''extension de la colonne',
         unique names (table_name, column_name)
       )
-      comment='Table stockant les extensions spatiales des autres tables de la base pour accélérer les requêtes,
-        table créée par mysql.inc.php le ".date(DATE_ATOM)."'";
+      comment='title: Extensions spatiales des autres tables de la base pour accélérer les requêtes
+creator: /phplib/mysql.inc.php#/MySql/spatialExtent
+created: ".date(DATE_ATOM)."'";
       Mysql::query($sql);
     }
     // cas 2: calcul de l'extension spatiale
@@ -327,7 +329,7 @@ class MySql implements Iterator {
       if ($mariaDB) {
         $wkt = "POLYGON(($extent[0] $extent[1],$extent[0] $extent[3],$extent[2] $extent[3],"
           ."$extent[2] $extent[1],$extent[0] $extent[1]))";
-        $sql = "insert into spatial_extent(table_name, column_name, geom)\n"
+        $sql = "insert into mysql_spatial_extent(table_name, column_name, geom)\n"
           ."values ('$tableName', '$c',  ST_GeomFromText('$wkt'))";
         MySql::query($sql);
         return $extent;
@@ -427,7 +429,7 @@ class MySql implements Iterator {
       }
       $wkt = "POLYGON(($extent[0] $extent[1],$extent[0] $extent[3],$extent[2] $extent[3],"
         ."$extent[2] $extent[1],$extent[0] $extent[1]))";
-      $sql = "insert into spatial_extent(table_name, column_name, geom)\n"
+      $sql = "insert into mysql_spatial_extent(table_name, column_name, geom)\n"
         ."values ('$tableName', '$c',  ST_GeomFromText('$wkt'))";
       MySql::query($sql);
       return $extent;
