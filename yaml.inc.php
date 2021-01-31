@@ -1,7 +1,7 @@
 <?php
 /*PhpDoc:
 name: yaml.inc.php
-title: yaml.inc.php - lecture d'un fichier YAML
+title: yaml.inc.php - lecture d'un fichier YAML (PERIME)
 includes: [ ../spyc/spyc2.inc.php ]
 functions:
 doc: |

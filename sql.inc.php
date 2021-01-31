@@ -63,7 +63,7 @@ class Sql {
         - "host={host} dbname={database} user={user}( password={passwd})?"
     Si le mot de passe n'est pas fourni alors il doit être défini dans le fichier secret.inc.php
   */
-  static function open(string $params) {
+  static function open(string $params): void {
     if (strncmp($params, 'mysql://', 8) == 0)
       self::$software = 'MySql';
     elseif (strncmp($params, 'pgsql://', 8) == 0)
@@ -93,7 +93,9 @@ class Sql {
     (self::$software)::close();
   }
   
-  static function toString(array $sql): string {
+  static function toString(array|string $sql): string {
+    if (is_string($sql))
+      return $sql;
     $sqlstr = '';
     foreach($sql as $sqlelt) // je balaye chaque élt de la requete
       // si l'élt est une chaine alors je l'utilise sinon j'en prends l'élément corr. au soft courant

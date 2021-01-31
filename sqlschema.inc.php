@@ -16,6 +16,8 @@ doc: |
   Pour des raisons de sécurité ces fonctionnalités sont limitées sur un serveur différent de localhost
 
 journal: |
+  30/1/2021:
+    - gestion des commentaires sur les tables sur MySql
   26/1/2021:
     - modif 2e paramètre de Schema::__construct()
   24-25/1/2021:

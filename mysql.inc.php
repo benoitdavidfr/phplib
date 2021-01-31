@@ -278,8 +278,8 @@ class MySql implements Iterator {
         geom polygon not null comment 'polygone constituant l''extension de la colonne',
         unique names (table_name, column_name)
       )
-      comment='title: Extensions spatiales des autres tables de la base pour accélérer les requêtes
-creator: /phplib/mysql.inc.php#/MySql/spatialExtent
+      comment='title: Extensions spatiales des autres tables de la base pour accélérer les requêtes  
+creator: /phplib/mysql.inc.php#/MySql/spatialExtent  
 created: ".date(DATE_ATOM)."'";
       Mysql::query($sql);
     }
@@ -317,7 +317,7 @@ created: ".date(DATE_ATOM)."'";
               ST_AsText(ST_Envelope($c)),
               '^POLYGON..[-0-9. ]+,[-0-9. ]+,([-0-9.]+) ([-0-9.]+),[-0-9. ]+,[-0-9. ]+..$',
               '${param}2')+0) ymax
-          from $_GET[table]
+          from $tableName
         "
          .(!$mariaDB ? "where ST_AsText(ST_Envelope($c)) REGEXP '^POLYGON'\n" : ''); 
         $tuple = MySql::getTuples($sql)[0];
@@ -370,7 +370,7 @@ created: ".date(DATE_ATOM)."'";
               ST_AsText(ST_Envelope($c)),
               '^LINESTRING.[-0-9. ]+,([-0-9.]+) ([-0-9.]+).$',
               '${param}2')+0) y2max
-          from $_GET[table]
+          from $tableName
           where ST_AsText(ST_Envelope($c)) REGEXP '^LINESTRING'
         ";
         $tuple = MySql::getTuples($sql)[0];
@@ -410,7 +410,7 @@ created: ".date(DATE_ATOM)."'";
               ST_AsText(ST_Envelope($c)),
               '^POINT.([-0-9.]+) ([-0-9.]+).$',
               '${param}2')+0) ymax
-          from $_GET[table]
+          from $tableName
           where ST_AsText(ST_Envelope($c)) REGEXP '^POINT'
         ";
         $tuple = MySql::getTuples($sql)[0];
