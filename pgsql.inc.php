@@ -22,6 +22,8 @@ doc: |
     - pg_indexes - index avec sa définition
 
 journal: |
+  6/2/2021:
+    - ajout à PgSql::query() de l'option 'jsonColumns' indiquant les colonnes à json_décoder
   29/1/2021:
     - chgt des URI
       serveur: pgsql://{user}(:{passwd})?@{server}(:{port})?  sans '/' à la fin
@@ -63,6 +65,7 @@ class PgSql implements Iterator {
   static $schema; // nom du schema s'il a été défini dans open() ou null
   protected $sql = null; // la requête conservée pour pouvoir faire plusieurs rewind
   protected $result = null; // l'objet retourné par pg_query()
+  protected array $options; // ['jsonColumns'=> {jsonColumns}]
   protected $first; // indique s'il s'agit du premier rewind
   protected $id; // un no en séquence à partir de 1
   protected $ctuple = false; // le tuple courant ou false
@@ -116,7 +119,7 @@ class PgSql implements Iterator {
           throw new Exception("Erreur: dans PgSql::open($params), mot de passe absent de secret.inc.php");
       }
       $conn_string .= " password=$passwd";
-      //echo "conn_string=$conn_string\n"; die();
+      //echo "conn_string=$conn_string\n"; //die();
     }
     if (!(self::$connection = pg_connect($conn_string)))
       throw new Exception('Could not connect: '.pg_last_error());
@@ -191,18 +194,21 @@ class PgSql implements Iterator {
     doc: |
       Si la requête renvoit comme résultat un ensemble de n-uplets alors retourne un itérateur donnant accès
       à chacun d'eux sous la forme d'un array [{column_name}=> valeur] (pg_fetch_array() avec PGSQL_ASSOC).
-      Sinon renvoit TRUE ssi la requête est Ok
-      Sinon en cas d'erreur PgSql génère une exception
+      Sinon renvoit un objet PgSql ssi la requête est Ok
+      Sinon en cas d'erreur génère une exception
     */
     if (!($result = @pg_query(self::$connection, $sql)))
       throw new Exception('Query failed: '.pg_last_error());
-    if ($result === TRUE)
-      return TRUE;
     else
-      return new PgSql($sql, $result);
+      return new PgSql($sql, $result, $options);
   }
 
-  function __construct(string $sql, $result) { $this->sql = $sql; $this->result = $result; $this->first = true; }
+  function __construct(string $sql, $result, array $options) {
+    $this->sql = $sql;
+    $this->result = $result;
+    $this->options = $options;
+    $this->first = true;
+  }
   
   function rewind(): void {
     if ($this->first) // la première fois ne pas faire de pg_query qui a déjà été fait
@@ -219,7 +225,15 @@ class PgSql implements Iterator {
   }
   
   function valid(): bool { return $this->ctuple <> false; }
-  function current(): array { return $this->ctuple; }
+  
+  function current(): array {
+    if (isset($this->options['jsonColumns'])) {
+      foreach ($this->options['jsonColumns'] as $jsonColumn)
+        $this->ctuple[$jsonColumn] = json_decode($this->ctuple[$jsonColumn], true);
+    }
+    return $this->ctuple;
+  }
+  
   function key(): int { return $this->id; }
 
   function affected_rows(): int { return pg_affected_rows($this->result); }
@@ -233,12 +247,25 @@ echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>pgsql.inc.php</t
 
 if (0) {
   echo "<pre>";
-  //PgSql::open('host=172.17.0.4 dbname=postgres user=postgres password=benoit'); 
-  PgSql::open('host=172.17.0.4 dbname=postgres user=postgres'); 
+  PgSql::open('host=pgsqlserver dbname=postgres user=postgres'); 
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (PgSql::query($sql) as $tuple) {
     echo "tuple="; print_r($tuple);
   }
+}
+elseif (0) { // Utilisation de affected_rows()
+  PgSql::open('pgsql://docker@pgsqlserver/gis/public');
+  
+  print_r(PgSql::query("drop table if exists test_pgsql"));
+  print_r(PgSql::query("create table test_pgsql(key serial primary key, field varchar(256))"));
+  print_r(PgSql::query("insert into test_pgsql(field) values ('une première valeur')"));
+  print_r(PgSql::query("insert into test_pgsql(field) values ('une seconde valeur')"));
+  $query = PgSql::query("delete from test_pgsql where field='une seconde valeur'");
+  print_r($query);
+  echo "affected_rows()=",$query->affected_rows(),"\n";
+  $query = PgSql::query("drop table test_pgsql");
+  print_r($query);
+  echo "affected_rows()=",$query->affected_rows(),"\n";
 }
 // Navigation dans serveur / base=catalogue / schéma / table / description / contenu (uniquement sur localhost)
 elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
@@ -328,7 +355,7 @@ elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
       throw new Exception("Requête \"$sql\" interdite");
     $url = "table=$table&amp;schema=$schema&amp;base=$base&amp;server=".urlencode($server);
     echo "</pre>",
-      "<h2>pgsql://$server$base/$schema/$table</h2>\n",
+      "<h2>pgsql://$server/$base/$schema/$table</h2>\n",
       
       "<form><table border=1><tr>",
       "<input type='hidden' name='offset' value='0'>",

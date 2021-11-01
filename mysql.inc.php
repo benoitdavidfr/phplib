@@ -43,6 +43,8 @@ doc: |
   A faire:
     - faire marcher spatial_extension
 journal: |
+  6/2/2021:
+    - ajout à MySql::query() de l'option 'jsonColumns' indiquant les colonnes à json_décoder
   30/1/2021:
     - amélioration de spatial_extent pour qu'il fonctionne sur MySql 8
   29/1/2021:
@@ -458,15 +460,21 @@ created: ".date(DATE_ATOM)."'";
   
   function current(): array {
     if (!($this->options['columnNamesInLowercase'] ?? null)) {
-      return $this->ctuple;
+      $tuple = $this->ctuple;
     }
     else {
       $tuple = [];
       foreach ($this->ctuple as $key => $val)
         $tuple[strtolower($key)] = $val;
-      return $tuple;
     }
+    if (isset($this->options['jsonColumns'])) {
+      foreach ($this->options['jsonColumns'] as $jsonColumn)
+        if (isset($tuple[$jsonColumn]))
+          $tuple[$jsonColumn] = json_decode($tuple[$jsonColumn], true);
+    }
+    return $tuple;
   }
+  
   function key(): int { return 0; }
   function next(): void { $this->ctuple = $this->result->fetch_array(MYSQLI_ASSOC); }
   function valid(): bool { return ($this->ctuple <> null); }
@@ -478,7 +486,8 @@ echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>mysql.inc.php</t
 
 
 if (0) {  // Test 2 rewind 
-  MySql::open('mysql://root@172.17.0.3/');
+  //MySql::open('mysql://root@172.17.0.3/');
+  MySql::open('mysql://root@mysqlserver/');
   $sql = "select * from information_schema.TABLES
   where table_schema<>'information_schema' and table_schema<>'mysql'";
   $result = MySql::query($sql);

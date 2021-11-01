@@ -146,7 +146,8 @@ echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>sql.inc.php</tit
 
 
 if (0) { // Test MySql
-  MySql::open('mysql://root@172.17.0.3/route500');
+  //MySql::open('mysql://root@172.17.0.3/route500');
+  MySql::open('mysql://root@mysqlserver/route500');
   $sql = "select *
     from INFORMATION_SCHEMA.TABLES
     where table_schema<>'information_schema'
@@ -168,14 +169,15 @@ if (0) { // Test MySql
   }
 }
 elseif (0) { // Test PgSql
-  PgSql::open('pgsql://docker@172.17.0.4/gis');
+  //PgSql::open('pgsql://docker@172.17.0.4/gis');
+  PgSql::open('pgsql://docker@pgsqlserver/gis');
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (PgSql::query($sql) as $tuple) {
     echo "tuple="; print_r($tuple);
   }
 }
 else { // Test Sql
-  Sql::open('host=172.17.0.4 dbname=gis user=docker'); 
+  Sql::open('host=pgsqlserver dbname=gis user=docker'); 
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (Sql::query($sql) as $tuple) {
     echo "tuple="; print_r($tuple);
