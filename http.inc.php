@@ -94,7 +94,8 @@ class Http {
         return $matches[1];
       }
     }
-    throw new Exception("Erreur, code d'erreur Http non trouvé dans Http::errorCode()");
+    echo "Erreur, code d'erreur Http non trouvé dans Http::errorCode()<br>\n";
+    return -2;
   }
   
   /*PhpDoc: methods
