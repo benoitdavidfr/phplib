@@ -22,6 +22,9 @@ doc: |
     - pg_indexes - index avec sa définition
 
 journal: |
+  6/11/2021:
+    - correction d'un bug lors de la connexion pgsql://{user}(:{passwd})?@{server}(:{port})?/{dbname}/{schema}
+      avec password
   6/2/2021:
     - ajout à PgSql::query() de l'option 'jsonColumns' indiquant les colonnes à json_décoder
   29/1/2021:
@@ -101,7 +104,7 @@ class PgSql implements Iterator {
       $schema = isset($matches[6]) ? substr($matches[6], 1) : null;
       //print_r($matches); die();
       $conn_string = "host=$server".($port ? " port=$port": '')
-        ." dbname=$database user=$user".($passwd ? "password=$passwd": '');
+        ." dbname=$database user=$user".($passwd ? " password=$passwd": '');
       //echo "conn_string=$conn_string\n";
     }
     else

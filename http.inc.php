@@ -4,8 +4,6 @@ name: http.inc.php
 title: http.inc.php - gestion de requêtes Http
 doc: |
   Code simplifié par rapport à httpreqst.inc.php
-
-  L'utilisation de l'option ignore_errors ne semble pas fonctionner systématiquement.
 journal: |
   1/11/2021:
     - prise en compte de l'option timeout
@@ -25,6 +23,9 @@ class Http {
   title: static function buildHttpContext(array $options) - construit le contexte http pour l'appel à file_get_contents()
   doc: |
     Les options sont celles définies pour request() ; renvoie un context
+    Il y a 2 types d'options:
+      - les options proprement dites
+      - les en-têtes HTTP qui sont codées différemment
   */
   static private function buildHttpContext(array $options) {
     if (!$options)
@@ -47,10 +48,15 @@ class Http {
   name: request
   title: "static function request(string $url, array $options=[]): array"
   doc: |
-    Renvoie un array constitué d'un champ 'headers' et d'un champ 'body'
-    En cas d'erreur HTTP
-      Si l'option ignore_errors est définie à true alors retourne l'erreur dans le headers
-      sinon lève une exception.
+    Renvoie un array constitué d'un champ 'headers' et d'un champ 'body'.
+  
+    Il semble qu'il y ait 2 cas d'erreurs:
+      1) le serveur renvoit un code d'erreur HTTP
+      2) la requête est interrompue avant que le serveur ne réponse, par ex. à cause d'un timeout
+    Dans le premier cas d'erreurs:
+      - si l'option ignore_errors est définie à true alors retourne l'erreur dans le headers
+      - sinon lève une exception (par défaut)
+    Dans le second cas d'erreurs une exception est levée.
   
     Les options possibles sont:
       'referer'=> referer à utiliser
@@ -68,9 +74,6 @@ class Http {
   static function request(string $url, array $options=[]): array {
     //echo "Http::request($url)\n";
     if (($body = @file_get_contents($url, false, self::buildHttpContext($options))) === false) {
-      if (0 && isset($http_response_header)) {
-        echo "http_response_header="; var_dump($http_response_header);
-      }
       throw new Exception("Erreur '".($http_response_header[0] ?? 'unknown')."' dans Http::query() : sur url=$url");
     }
     return [
@@ -79,9 +82,16 @@ class Http {
     ];
   }
   
-  // Retourne le code d'erreur qui est dans la première ligne des headers
-  // sauf en cas de redirection où if faut rechercher le code d'erreur dans la suite du header
-  // Voir https://www.php.net/manual/fr/context.http.php
+  /*PhpDoc: methods
+  name: request
+  title: "static function errorCode(array $headers): int"
+  doc: |
+    Dans le cas où l'option ignore_errors est définie à true, un code d'erreur HTTP est retourné dans les headers.
+    Cette méthode analyse les en-têtes et retourne le code d'erreur HTTP ou -2 si ce code n'est pas trouvé.
+    Le code d'erreur est normalement dans la première ligne des headers.
+    Cependant, en cas de redirection, le code est dans la suite des headers
+    Voir https://www.php.net/manual/fr/context.http.php
+  */
   static function errorCode(array $headers): int {
     //print_r($headers[0]); echo "\n";
     $errorCode = (int)substr($headers[0], 9, 3); // code d'erreur http dans la première ligne des headers
