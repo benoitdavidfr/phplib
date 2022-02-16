@@ -15,7 +15,7 @@ doc: |
   et en PgSql à un schéma.
   Le concept de catalogue, qui est un ensemble de schémas, correspond en MySql à un serveur et en PgSql à une base.
 
-  Une vision homogène entre les 2 logiciels est définie en s'appuyant sur ces notion de schéma et de catalogue.
+  Une vision homogène entre les 2 logiciels est définie en s'appuyant sur ces notions de schéma et de catalogue.
   Les URI pour un schéma respectent un des motifs:
     - pour MySql "mysql://{user}(:{passwd})?@{host}/{database}"
     - pour PgSql "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}/{schema}"
@@ -28,6 +28,10 @@ doc: |
   Sql, MySql et PgSql sont des classes statiques ce qui implique qu'un script ne peut travailler simultanément
   avec 2 catalogues différents.
 journal: |
+  15/2/2022:
+    - ajout de la méthode Sql::schema()
+  14/2/2022:
+    - correction d'un bug dans Sql::query() lorsque au final la requête issue de Sql::toString() est vide
   25/1/2021:
     - amélioration utilisation des URI
   1-15/1/2021:
@@ -52,18 +56,18 @@ methods:
 class Sql {
   static $software = ''; // 'MySql' ou 'PgSql'
   
-  /*PhpDoc: methods
-  name: open
-  title: "static function open(string $params) - ouverture d'une connexion à un serveur de BD"
-  doc: |
-    La méthode statique Sql::open() prend en paramètre les paramètres MySql ou PgSql respectant les motifs:
-      - pour MySql "mysql://{user}(:{passwd})?@{host}(/{database})?"
-      - pour PgSql
-        - "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" ou
-        - "host={host} dbname={database} user={user}( password={passwd})?"
-    Si le mot de passe n'est pas fourni alors il doit être défini dans le fichier secret.inc.php
-  */
   static function open(string $params): void {
+    /*PhpDoc: methods
+    name: open
+    title: "static function open(string $params) - ouverture d'une connexion à un serveur de BD"
+    doc: |
+      La méthode statique Sql::open() prend en paramètre les paramètres MySql ou PgSql respectant les motifs:
+        - pour MySql "mysql://{user}(:{passwd})?@{host}(/{database})?"
+        - pour PgSql
+          - "pgsql://{user}(:{passwd})?@{host}(:{port})?/{database}(/{schema})?" ou
+          - "host={host} dbname={database} user={user}( password={passwd})?"
+      Si le mot de passe n'est pas fourni alors il doit être défini dans le fichier secret.inc.php
+    */
     if (strncmp($params, 'mysql://', 8) == 0)
       self::$software = 'MySql';
     elseif (strncmp($params, 'pgsql://', 8) == 0)
@@ -87,6 +91,12 @@ class Sql {
     return (self::$software)::server();
   }
   
+  static function schema(): ?string {
+    if (!self::$software)
+      throw new Exception('Erreur: dans Sql::server()');
+    return (self::$software)::schema();
+  }
+  
   static function close(): void {
     if (!self::$software)
       throw new Exception('Erreur: dans Sql::close()');
@@ -103,27 +113,27 @@ class Sql {
     return $sqlstr;
   }
     
-  /*PhpDoc: methods
-  name: query
-  title: "static function query(string|array $sql, array $options=[]) - éxécution d'une requête"
-  doc: |
-    La requête est soit une chaine soit une liste d'éléments,
-    chacun étant une chaine ou un dictionnaire utilisant comme clé l'id du software.
-    Cela permet d'écrire de manière relativement claire des requêtes dépendant du soft.
-    Si la requête échoue alors renvoie une exception
-    sinon si le résultat est un ensemble de n-uplets alors renvoie un objet MySql ou PgSql qui pourra être itéré
-    pour obtenir chacun des n-uplets
-    sinon renvoie TRUE
-  */
   static function query(string|array $sql, array $options=[]) {
+    /*PhpDoc: methods
+    name: query
+    title: "static function query(string|array $sql, array $options=[]) - éxécute une requête"
+    doc: |
+      La requête est soit une chaine, soit une liste d'éléments,
+      chacun étant une chaine ou un dictionnaire utilisant comme clé l'id du software.
+      Cela permet d'écrire de manière relativement claire des requêtes dépendant du soft.
+      Si la requête échoue alors renvoie une exception
+      sinon si le résultat est un ensemble de n-uplets alors renvoie un objet MySql ou PgSql qui pourra être itéré
+      pour obtenir chacun des n-uplets
+      sinon renvoie TRUE
+    */
     if (!self::$software)
       throw new Exception('Erreur: dans Sql::query(), software non défini');
     if (is_string($sql))
       return (self::$software)::query($sql, $options);
-    elseif (is_array($sql))
-      return (self::$software)::query(self::toString($sql), $options);
+    elseif ($sqlstr = self::toString($sql))
+      return (self::$software)::query($sqlstr, $options);
     else
-      throw new Exception('Erreur: dans Sql::query()');
+      return true;
   }
 
   static function getTuples(string|array $sql): array { // renvoie le résultat d'une requête sous la forme d'un array
@@ -146,7 +156,6 @@ echo "<!DOCTYPE HTML><html>\n<head><meta charset='UTF-8'><title>sql.inc.php</tit
 
 
 if (0) { // Test MySql
-  //MySql::open('mysql://root@172.17.0.3/route500');
   MySql::open('mysql://root@mysqlserver/route500');
   $sql = "select *
     from INFORMATION_SCHEMA.TABLES
@@ -169,7 +178,6 @@ if (0) { // Test MySql
   }
 }
 elseif (0) { // Test PgSql
-  //PgSql::open('pgsql://docker@172.17.0.4/gis');
   PgSql::open('pgsql://docker@pgsqlserver/gis');
   $sql = "select * from INFORMATION_SCHEMA.TABLES where table_schema='public'";
   foreach (PgSql::query($sql) as $tuple) {

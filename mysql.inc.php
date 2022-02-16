@@ -43,6 +43,11 @@ doc: |
   A faire:
     - faire marcher spatial_extension
 journal: |
+  15/2/2022:
+    - ajout de la méthode PgSql::schema()
+  20/1/2022:
+    - correction d'un bug dans MySql::open()
+    - correction d'un bug dans MySql::query()
   6/2/2021:
     - ajout à MySql::query() de l'option 'jsonColumns' indiquant les colonnes à json_décoder
   30/1/2021:
@@ -95,7 +100,7 @@ class MySql implements Iterator {
   static ?string $database; // éventuellement la base ouverte
   
   private string $sql = ''; // la requête SQL pour pouvoir la rejouer
-  private $result = null; // l'objet mysqli_result
+  private ?mysqli_result $result = null; // l'objet mysqli_result
   private array $options = []; // options: ['columnNamesInLowercase'=>bool]
   private ?array $ctuple = null; // le tuple courant ou null
   private bool $first = true; // vrai ssi aucun rewind n'a été effectué
@@ -112,7 +117,7 @@ class MySql implements Iterator {
       Si le nom de la base est défini alors elle est sélectionnée.
       Sur localhost ou docker, si la base est définie et n'existe pas alors elle est créée.
     */
-    if (!preg_match('!^mysql://([^@:]+)(:[^@])?@([^/]+)(/.*)?$!', $params, $matches))
+    if (!preg_match('!^mysql://([^@:]+)(:[^@]+)?@([^/]+)(/.*)?$!', $params, $matches))
       throw new Exception("Erreur: dans MySql::open() params \"".$params."\" incorrect");
     //print_r($matches);
     $user = $matches[1];
@@ -156,6 +161,8 @@ class MySql implements Iterator {
     return self::$server;
   }
   
+  static function schema(): ?string { return self::$database; }
+
   static function server_info(): string {
     if (!self::$server)
       throw new Exception("Erreur: dans MySql::server_info() server non défini");
@@ -217,7 +224,7 @@ class MySql implements Iterator {
     */
     if (!self::$mysqli)
       throw new Exception("Erreur: dans MySql::query() mysqli non défini");
-    if (!($result = self::$mysqli->query($sql))) {
+    if (!($result = self::$mysqli->query($sql, MYSQLI_USE_RESULT))) {
       //echo "sql:$sql\n";
       if (strlen($sql) > 1000)
         $sql = substr($sql, 0, 800)." ...";

@@ -22,6 +22,10 @@ doc: |
     - pg_indexes - index avec sa définition
 
 journal: |
+  15/2/2022:
+    - ajout de la méthode PgSql::schema()
+  20/1/2022:
+    - correction fonctionnailté dépéciée en Php 8.1 dans PgSql::query()
   6/11/2021:
     - correction d'un bug lors de la connexion pgsql://{user}(:{passwd})?@{server}(:{port})?/{dbname}/{schema}
       avec password
@@ -127,8 +131,10 @@ class PgSql implements Iterator {
     if (!(self::$connection = pg_connect($conn_string)))
       throw new Exception('Could not connect: '.pg_last_error());
     
-    if ($schema)
+    if ($schema) {
+      //echo "query(SET search_path TO $schema)\n";
       self::query("SET search_path TO $schema");
+    }
   }
   
   /*static function server(): string {
@@ -138,6 +144,10 @@ class PgSql implements Iterator {
   }*/
   
   static function close(): void { pg_close(); }
+  
+  static function server(): string { return self::$server; }
+  
+  static function schema(): ?string { return self::$schema; }
   
   static function pg_version(): array { return pg_version(self::$connection); }
   
@@ -200,8 +210,9 @@ class PgSql implements Iterator {
       Sinon renvoit un objet PgSql ssi la requête est Ok
       Sinon en cas d'erreur génère une exception
     */
+    //echo '$sql dans query(): '; print_r($sql);
     if (!($result = @pg_query(self::$connection, $sql)))
-      throw new Exception('Query failed: '.pg_last_error());
+      throw new Exception('Query failed: '.pg_last_error(self::$connection));
     else
       return new PgSql($sql, $result, $options);
   }

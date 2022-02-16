@@ -7,12 +7,14 @@ doc: |
 phpScripts:
   - /phplib/httptester.php
 phpIncludes:
+  - /phplib/accents.inc.php
   - /phplib/sql.inc.php
   - /phplib/secret.inc.php
   - /phplib/mysql.inc.php
   - /phplib/pgsql.inc.php
   - /phplib/sqlschema.inc.php
   - /phplib/openmysql.inc.php
+  - /phplib/http.inc.php
   - /phplib/httpreqst.inc.php
   - /phplib/httpcache.inc.php
   - /phplib/httpcachsql.inc.php

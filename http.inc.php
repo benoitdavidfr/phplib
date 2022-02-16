@@ -2,6 +2,7 @@
 /*PhpDoc:
 name: http.inc.php
 title: http.inc.php - gestion de requêtes Http
+classes:
 doc: |
   Code simplifié par rapport à httpreqst.inc.php
 journal: |
@@ -74,7 +75,7 @@ class Http {
   static function request(string $url, array $options=[]): array {
     //echo "Http::request($url)\n";
     if (($body = @file_get_contents($url, false, self::buildHttpContext($options))) === false) {
-      throw new Exception("Erreur '".($http_response_header[0] ?? 'unknown')."' dans Http::query() : sur url=$url");
+      throw new Exception("Erreur '".($http_response_header[0] ?? 'unknown')."' dans Http::request() : sur url=$url");
     }
     return [
       'headers'=> $http_response_header,

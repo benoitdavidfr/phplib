@@ -5,17 +5,27 @@ name: sqlschema.inc.php
 title: sqlschema.inc.php - utilisation du schema Sql
 classes:
 doc: |
-  La classe Schema contient les infos d'un schéma Sql (base MySql ou schéma PgSql).
-  Création à partir d'un URI de la forme mysql://serveur/base ou pgsql://serveur/base/schema
+  Gère des schémas, des tables et des colonnes à partir des concepts suivants :
+  | Concept Sql |              PgSql                   |               MySql                      |
+  +-------------+--------------------------------------+------------------------------------------+
+  | Serveur     | serveur (pgsql://serveur/)           | serveur (mysql://serveur/)               |
+  | Catalogue   | base (pgsql://serveur/base)          | catalogue = serveur                      |
+  | Schema      | schéma (pgsql://serveur/base/schema) | base d'un serveur (mysql://serveur/base) |
+  | Table       |
+  | Column      |
 
   namespace Sql
 
   le champ Column::dataType devrait être plus standardisé, par exemple utiliser les types JSON ou SQL standards.
 
-  Le script implémente comme test un navigateur dans les serveurs définis dans secret.inc.php
-  Pour des raisons de sécurité ces fonctionnalités sont limitées sur un serveur différent de localhost
+  Le script implémente comme test un navigateur dans les serveurs Sql définis dans secret.inc.php
+  Pour des raisons de sécurité ces fonctionnalités sont limitées lorsque le serveur Http <> localhost
 
 journal: |
+  16/2/2022:
+    - ajout de la gestion des colonnes géographiques
+  21/1/2022:
+    - correction d'un bug pour passer la requête sql dans le navigateur dans les liens > et <
   30/1/2021:
     - gestion des commentaires sur les tables sur MySql
   26/1/2021:
@@ -270,6 +280,14 @@ class Table {
   // liste des colonnes géométriques
   function listOfGeometryColumns(): array { return $this->listOfColumnOfOneOfTheTypes(Column::OGC_GEOM_TYPES); }
   
+  // liste des colonnes géographiques
+  function listOfGeographyColumns(): array { return $this->listOfColumnOfOneOfTheTypes(Column::OGC_GEOG_TYPES); }
+
+  // liste des colonnes géométriques ou géographiques
+  function listOfGeoColumns(): array {
+    return $this->listOfColumnOfOneOfTheTypes(array_merge(Column::OGC_GEOM_TYPES, Column::OGC_GEOG_TYPES));
+  }
+
   function pkeyCol(): ?Column {
     foreach ($this->columns as $cname => $column) {
       if ($column->indexed == 'primary')
@@ -300,8 +318,10 @@ doc: |
 methods:
 */
 class Column {
-  // Types géométriques pour MySql
+  // Types géométriques
   const OGC_GEOM_TYPES = ['geometry','point','multipoint','linestring','multilinestring','polygon','multipolygon'];
+  // Types géographiques
+  const OGC_GEOG_TYPES = ['geography'];
 
   protected Table $table; // table à laquelle la colonne appartient
   protected string $name;
@@ -362,6 +382,12 @@ class Column {
   }
   
   function hasGeometryType(): bool { return in_array($this->dataType, self::OGC_GEOM_TYPES); }
+
+  function hasGeographyType(): bool { return in_array($this->dataType, self::OGC_GEOG_TYPES); }
+
+  function hasGeoType(): bool {
+    return in_array($this->dataType, self::OGC_GEOM_TYPES) || in_array($this->dataType, self::OGC_GEOG_TYPES);
+  }
 };
 
 
@@ -515,7 +541,7 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
       $schema = new Schema($schema, ['table_names'=> [$table]]);
       $columns = [];
       foreach ($schema->tables[$table]->columns as $cname => $column) {
-        if ($column->hasGeometryType())
+        if ($column->hasGeometryType() || $column->hasGeographyType())
           $columns[] = "ST_AsGeoJSON($cname) $cname";
         else
           $columns[] = $cname;
@@ -526,7 +552,7 @@ else { // Navigation dans serveur / catalogue / schéma / table / description / 
       Sql::open($schema);
     }
     //echo "sql=$sql\n";
-    $url = "table=$table&amp;schema=".urlencode($schema);
+    $url = "sql=".urlencode($sql)."&amp;table=$table&amp;schema=".urlencode($schema);
     echo "</pre><h2>$schema/$table</h2>\n";
     if ($_SERVER['HTTP_HOST'] == 'localhost') // uniquement sur localhost possibilité de fournir une requête Sql
       echo "<form><table border=1><tr>",
