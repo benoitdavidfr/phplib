@@ -22,6 +22,8 @@ doc: |
     - pg_indexes - index avec sa définition
 
 journal: |
+  4/3/2022:
+    - modification de l'envoi de l'exception lors d'une erreur de connexion à la base
   15/2/2022:
     - ajout de la méthode PgSql::schema()
   20/1/2022:
@@ -128,8 +130,8 @@ class PgSql implements Iterator {
       $conn_string .= " password=$passwd";
       //echo "conn_string=$conn_string\n"; //die();
     }
-    if (!(self::$connection = pg_connect($conn_string)))
-      throw new Exception('Could not connect: '.pg_last_error());
+    if (!(self::$connection = @pg_connect($conn_string)))
+      throw new Exception("Could not connect to \"pgsql://$user:***@$server".($port?":$port":'')."/\"");
     
     if ($schema) {
       //echo "query(SET search_path TO $schema)\n";
@@ -280,6 +282,9 @@ elseif (0) { // Utilisation de affected_rows()
   $query = PgSql::query("drop table test_pgsql");
   print_r($query);
   echo "affected_rows()=",$query->affected_rows(),"\n";
+}
+elseif (1) { // Test de l'erreur de connexion
+  PgSql::open('pgsql://xx::xx@pgsqlserver/gis/public');
 }
 // Navigation dans serveur / base=catalogue / schéma / table / description / contenu (uniquement sur localhost)
 elseif ($_SERVER['HTTP_HOST'] == 'localhost') {
